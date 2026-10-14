@@ -27,6 +27,8 @@ public final class MusicNetwork {
     private static final byte OP_VOLUME = 9;
     private static final byte OP_SEEK = 10;
     private static final byte OP_SYNC = 11;
+    private static final byte OP_RECONNECT_QUERY = 12;
+    private static final byte OP_RECONNECT_STATUS = 13;
 
     private static final int PROTOCOL_VERSION = 1;
 
@@ -112,6 +114,7 @@ public final class MusicNetwork {
                 case OP_VOLUME -> handleVolume(data);
                 case OP_SEEK -> handleSeek(data);
                 case OP_SYNC -> handleSync(data);
+                case OP_RECONNECT_STATUS -> handleReconnectStatus(data);
 
                 default ->
                         System.out.println(
@@ -148,6 +151,9 @@ public final class MusicNetwork {
                 "[VibesInDev] Server HELLO_ACK received. Protocol "
                         + version
         );
+
+        // Ask the server if any music is currently playing in our party
+        sendReconnectQuery();
     }
 
     private static void handleStart(
@@ -566,6 +572,61 @@ public final class MusicNetwork {
             System.err.println(
                     "[VibesInDev] Failed to send playback-finished: " + e.getMessage()
             );
+        }
+    }
+
+    /**
+     * Sends OP_RECONNECT_QUERY to the server, asking if any party music is playing.
+     */
+    public static void sendReconnectQuery() {
+        try {
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream(1);
+            try (DataOutputStream out = new DataOutputStream(bytes)) {
+                out.writeByte(OP_RECONNECT_QUERY);
+            }
+
+            Minecraft mc = Minecraft.getInstance();
+            if (mc.getConnection() != null) {
+                ClientPlayNetworking.send(new MusicPayload(bytes.toByteArray()));
+                System.out.println("[VibesInDev] Sent party music reconnect query to server.");
+            }
+        } catch (IOException e) {
+            System.err.println("[VibesInDev] Failed to send reconnect query: " + e.getMessage());
+        }
+    }
+
+    private static void handleReconnectStatus(byte[] data) throws IOException {
+        if (data.length < 10) {
+            return;
+        }
+
+        DataInputStream in = new DataInputStream(new ByteArrayInputStream(data, 1, data.length - 1));
+        byte status = in.readByte();
+        long positionMs = in.readLong();
+        long durationSeconds = in.readLong();
+
+        if (status == 1 || status == 2) {
+            int titleLen = in.readInt();
+            byte[] titleBytes = new byte[titleLen];
+            in.readFully(titleBytes);
+            String title = new String(titleBytes, java.nio.charset.StandardCharsets.UTF_8);
+
+            int artistLen = in.readInt();
+            byte[] artistBytes = new byte[artistLen];
+            in.readFully(artistBytes);
+            String artist = new String(artistBytes, java.nio.charset.StandardCharsets.UTF_8);
+
+            int ownerLen = in.readInt();
+            byte[] ownerBytes = new byte[ownerLen];
+            in.readFully(ownerBytes);
+            String owner = new String(ownerBytes, java.nio.charset.StandardCharsets.UTF_8);
+
+            System.out.println("[VibesInDev] Active party music found on reconnect! Resuming: "
+                    + title + " - " + artist + " at " + positionMs + "ms");
+
+            dev.vibesindev.vibesmusic.client.gui.MusicHudOverlay.showReconnectNotice(title, artist, positionMs);
+        } else {
+            System.out.println("[VibesInDev] No active party music on reconnect.");
         }
     }
 }

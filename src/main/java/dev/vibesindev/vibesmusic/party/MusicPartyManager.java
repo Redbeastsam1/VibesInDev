@@ -16,6 +16,18 @@ public final class MusicPartyManager {
     private final VibesInDevPlugin plugin;
 
     private final Map<UUID, BukkitTask> ownerGraceTasks = new ConcurrentHashMap<>();
+    private final Map<UUID, BukkitTask> memberGraceTasks = new ConcurrentHashMap<>();
+    private final Map<UUID, UUID> lastKnownParties = new ConcurrentHashMap<>();
+
+    public UUID getLastKnownParty(UUID player) {
+        return (player != null) ? lastKnownParties.get(player) : null;
+    }
+
+    public void setPlayerParty(UUID player, MusicParty party) {
+        if (player != null && party != null) {
+            playerParties.put(player, party);
+        }
+    }
 
     /*
      * partyId -> party
@@ -340,6 +352,8 @@ public final class MusicPartyManager {
             BukkitTask task = ownerGraceTasks.remove(party.getPartyId());
             if (task != null) task.cancel();
         }
+        BukkitTask memTask = memberGraceTasks.remove(player);
+        if (memTask != null) memTask.cancel();
 
         party.removeMember(player);
 
@@ -731,10 +745,30 @@ public final class MusicPartyManager {
 
     public void handlePlayerJoin(UUID player) {
         MusicParty party = playerParties.get(player);
-        if (party != null && party.isOwner(player)) {
-            BukkitTask task = ownerGraceTasks.remove(party.getPartyId());
-            if (task != null) {
-                task.cancel();
+        if (party != null) {
+            if (party.isOwner(player)) {
+                BukkitTask task = ownerGraceTasks.remove(party.getPartyId());
+                if (task != null) {
+                    task.cancel();
+                }
+            }
+            BukkitTask memberTask = memberGraceTasks.remove(player);
+            if (memberTask != null) {
+                memberTask.cancel();
+            }
+        } else {
+            // Reconnecting player: check if their previous party still exists
+            UUID lastPartyId = lastKnownParties.get(player);
+            if (lastPartyId != null) {
+                MusicParty lastParty = parties.get(lastPartyId);
+                if (lastParty != null && !lastParty.isEmpty()) {
+                    lastParty.addMember(player);
+                    playerParties.put(player, lastParty);
+                    BukkitTask memberTask = memberGraceTasks.remove(player);
+                    if (memberTask != null) {
+                        memberTask.cancel();
+                    }
+                }
             }
         }
     }
@@ -753,10 +787,15 @@ public final class MusicPartyManager {
             return null;
         }
         
+        lastKnownParties.put(player, party.getPartyId());
+
+        int graceSeconds = plugin.getConfig().getInt("party.disconnect-grace-seconds", 180);
+        long ticks = graceSeconds * 20L;
+        
         if (party.isOwner(player)) {
-            int graceSeconds = plugin.getConfig().getInt("party.owner-return-grace-seconds", 120);
-            long ticks = graceSeconds * 20L;
-            
+            BukkitTask oldTask = ownerGraceTasks.remove(party.getPartyId());
+            if (oldTask != null) oldTask.cancel();
+
             BukkitTask task = plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
                 ownerGraceTasks.remove(party.getPartyId());
                 
@@ -785,7 +824,7 @@ public final class MusicPartyManager {
                         
                         org.bukkit.entity.Player pNew = plugin.getServer().getPlayer(newOwner);
                         if (pNew != null && pNew.isOnline()) {
-                            pNew.sendMessage(org.bukkit.ChatColor.GREEN + "♫ You are now the party owner because the previous owner's grace period expired.");
+                            pNew.sendMessage(org.bukkit.ChatColor.GREEN + "You are now the party owner because the previous owner's grace period expired.");
                         }
                         
                         for (UUID member : party.getMembers()) {
@@ -804,7 +843,20 @@ public final class MusicPartyManager {
             ownerGraceTasks.put(party.getPartyId(), task);
             return new PartyLeaveResult(party, player, true, null, true);
         } else {
-            return leavePartyDetailed(player);
+            // Disconnect grace period for members: keep member in party so they can rejoin smoothly
+            BukkitTask oldTask = memberGraceTasks.remove(player);
+            if (oldTask != null) oldTask.cancel();
+
+            BukkitTask task = plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
+                memberGraceTasks.remove(player);
+                org.bukkit.entity.Player online = plugin.getServer().getPlayer(player);
+                if (online == null || !online.isOnline()) {
+                    leavePartyDetailed(player);
+                }
+            }, ticks);
+
+            memberGraceTasks.put(player, task);
+            return new PartyLeaveResult(party, player, false, null, true);
         }
     }
 
@@ -819,6 +871,12 @@ public final class MusicPartyManager {
             task.cancel();
         }
         ownerGraceTasks.clear();
+
+        for (BukkitTask task : memberGraceTasks.values()) {
+            task.cancel();
+        }
+        memberGraceTasks.clear();
+        lastKnownParties.clear();
 
         parties.clear();
 

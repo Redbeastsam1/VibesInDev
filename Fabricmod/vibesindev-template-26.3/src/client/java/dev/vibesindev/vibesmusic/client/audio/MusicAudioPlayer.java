@@ -83,6 +83,8 @@ public final class MusicAudioPlayer {
 
     private static volatile int recoveryAttempts;
 
+    private static volatile long pendingSeekPositionMs = -1L;
+
     /** Tracks the current stream UUID so the completion signal can reference it. */
     private static volatile java.util.UUID currentStreamId;
 
@@ -203,18 +205,41 @@ public final class MusicAudioPlayer {
         minecraft.getMusicManager()
                 .stopPlaying();
 
-        StreamingSoundInstance sound =
-                new StreamingSoundInstance(false);
+        long initialSeek = pendingSeekPositionMs;
+        pendingSeekPositionMs = -1L;
 
-        currentSound = sound;
-        playing = true;
+        if (initialSeek > 0) {
+            long bps = (lastBytesPerSecond > 0) ? lastBytesPerSecond : 176400L;
+            recoveryTargetBytes = initialSeek * bps / 1000L;
+            recovering = true;
+            recoveryStartedAtMillis = System.currentTimeMillis();
 
-        minecraft.getSoundManager()
-                .play(sound);
+            StreamingSoundInstance sound =
+                    new StreamingSoundInstance(true, initialSeek);
 
-        System.out.println(
-                "[VibesInDev] Minecraft streaming audio playback started."
-        );
+            currentSound = sound;
+            playing = true;
+
+            minecraft.getSoundManager()
+                    .play(sound);
+
+            System.out.println(
+                    "[VibesInDev] Playback started mid-track at " + initialSeek + "ms (target PCM bytes: " + recoveryTargetBytes + ")."
+            );
+        } else {
+            StreamingSoundInstance sound =
+                    new StreamingSoundInstance(false, 0L);
+
+            currentSound = sound;
+            playing = true;
+
+            minecraft.getSoundManager()
+                    .play(sound);
+
+            System.out.println(
+                    "[VibesInDev] Minecraft streaming audio playback started."
+            );
+        }
     }
 
 
@@ -357,6 +382,10 @@ public final class MusicAudioPlayer {
     public static void seekTo(long positionMs) {
 
         if (!playing) {
+            pendingSeekPositionMs = positionMs;
+            System.out.println(
+                    "[VibesInDev] Buffering initial seek to " + positionMs + "ms (pending playback start)."
+            );
             return;
         }
 
@@ -366,10 +395,9 @@ public final class MusicAudioPlayer {
             bytesPerSecond = currentSound.bytesPerSecond;
         }
 
-        // Convert ms → PCM bytes
         recoveryTargetBytes = (bytesPerSecond > 0)
                 ? (positionMs * bytesPerSecond / 1000L)
-                : 0;
+                : (positionMs * 176400L / 1000L);
 
         paused = false;
         recovering = true;
@@ -377,7 +405,7 @@ public final class MusicAudioPlayer {
         recoveryStartedAtMillis = System.currentTimeMillis();
 
         StreamingSoundInstance old = currentSound;
-        StreamingSoundInstance replacement = new StreamingSoundInstance(true);
+        StreamingSoundInstance replacement = new StreamingSoundInstance(true, positionMs);
         currentSound = replacement;
 
         Minecraft mc = Minecraft.getInstance();
@@ -570,7 +598,7 @@ public final class MusicAudioPlayer {
         );
 
         StreamingSoundInstance replacement =
-                new StreamingSoundInstance(true);
+                new StreamingSoundInstance(true, 0L);
 
         currentSound = replacement;
 
@@ -634,11 +662,19 @@ public final class MusicAudioPlayer {
             implements FabricSoundInstance, TickableSoundInstance {
 
         private final boolean resume;
-
+        private final long initialSeekMs;
         private volatile long bytesPerSecond;
+        private int tickCount = 0;
 
         private StreamingSoundInstance(
                 boolean resume
+        ) {
+            this(resume, 0L);
+        }
+
+        private StreamingSoundInstance(
+                boolean resume,
+                long initialSeekMs
         ) {
             super(
                     STREAM_SOUND_ID,
@@ -647,9 +683,10 @@ public final class MusicAudioPlayer {
             );
 
             this.resume = resume;
+            this.initialSeekMs = initialSeekMs;
 
-            this.volume =
-                    MusicAudioPlayer.volume;
+            // Start volume at 0 if resuming/reconnecting so we can smoothly fade in
+            this.volume = resume ? 0.0F : MusicAudioPlayer.volume;
 
             this.pitch = 1.0F;
             this.looping = false;
@@ -665,12 +702,15 @@ public final class MusicAudioPlayer {
 
         @Override
         public float getVolume() {
+            if (resume && tickCount < 10) {
+                float fadeRatio = Math.min(1.0F, (float) tickCount / 10.0F);
+                return MusicAudioPlayer.volume * fadeRatio;
+            }
             return MusicAudioPlayer.volume;
         }
 
         private void updateVolume() {
-            this.volume =
-                    MusicAudioPlayer.volume;
+            this.volume = getVolume();
         }
 
 
@@ -680,8 +720,10 @@ public final class MusicAudioPlayer {
 
         @Override
         public void tick() {
-            this.volume =
-                    MusicAudioPlayer.volume;
+            if (resume && tickCount < 10) {
+                tickCount++;
+            }
+            this.volume = getVolume();
         }
 
         @Override
@@ -762,14 +804,17 @@ public final class MusicAudioPlayer {
                                 );
                             }
 
-                            long target =
-                                    recoveryTargetBytes;
+                            long target = (initialSeekMs > 0 && bytesPerSecond > 0)
+                                    ? (initialSeekMs * bytesPerSecond / 1000L)
+                                    : recoveryTargetBytes;
 
                             System.out.println(
                                     "[VibesInDev] Recovery decoder "
                                             + "seeking to approximately "
                                             + target
-                                            + " PCM bytes."
+                                            + " PCM bytes ("
+                                            + (bytesPerSecond > 0 ? (target * 1000L / bytesPerSecond) : 0)
+                                            + "ms)."
                             );
 
                             skipDecodedPcm(
@@ -778,6 +823,8 @@ public final class MusicAudioPlayer {
                             );
 
                             playedPcmBytes =
+                                    target;
+                            recoveryTargetBytes =
                                     target;
 
                             System.out.println(

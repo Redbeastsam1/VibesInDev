@@ -42,6 +42,8 @@ public final class MusicNetworkManager
     static final byte OP_VOLUME = 9;
     static final byte OP_SEEK = 10;
     static final byte OP_SYNC = 11;
+    public static final byte OP_RECONNECT_QUERY = 12;
+    public static final byte OP_RECONNECT_STATUS = 13;
 
 
     private final VibesInDevPlugin plugin;
@@ -464,6 +466,15 @@ public final class MusicNetworkManager
                         "VibesInDev Fabric client detected: "
                                 + player.getName()
                 );
+
+                // Auto-sync fallback: if client is in a party that's currently playing, resume them
+                plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
+                    if (player.isOnline() && isSupported(player) && !streamer.isPlaying(player)) {
+                        handleReconnectResume(player, false);
+                    }
+                }, 5L);
+            } else if (opcode == OP_RECONNECT_QUERY) {
+                handleReconnectQuery(player);
             } else if (opcode == OP_END) {
                 if (in.available() >= 16) {
                     long msb = in.readLong();
@@ -828,6 +839,122 @@ public final class MusicNetworkManager
 
         out.writeInt(bytes.length);
         out.write(bytes);
+    }
+
+    public void handleReconnectQuery(Player player) {
+        handleReconnectResume(player, true);
+    }
+
+    private void handleReconnectResume(Player player, boolean sendQueryReply) {
+        UUID playerId = player.getUniqueId();
+        MusicParty party = plugin.parties().getPartyByPlayer(playerId);
+
+        if (party == null) {
+            UUID lastPartyId = plugin.parties().getLastKnownParty(playerId);
+            if (lastPartyId != null) {
+                party = plugin.parties().getParty(lastPartyId);
+                if (party != null) {
+                    party.addMember(playerId);
+                    plugin.parties().setPlayerParty(playerId, party);
+                }
+            }
+        }
+
+        if (party != null && playback != null) {
+            dev.vibesindev.vibesmusic.playback.PlaybackSession session = playback.getSession(party.getPartyId());
+            Track currentTrack = party.getCurrentTrack();
+
+            if (session != null && currentTrack != null &&
+                    (session.getState() == dev.vibesindev.vibesmusic.playback.PlaybackState.PLAYING
+                            || session.getState() == dev.vibesindev.vibesmusic.playback.PlaybackState.PAUSED)) {
+
+                long positionMs = session.getPositionMs();
+                byte status = (session.getState() == dev.vibesindev.vibesmusic.playback.PlaybackState.PAUSED) ? (byte) 2 : (byte) 1;
+
+                if (sendQueryReply) {
+                    sendReconnectStatus(player, status, positionMs, currentTrack, party);
+                }
+
+                player.sendMessage(
+                        org.bukkit.ChatColor.GOLD + "[VibesInDev] "
+                                + org.bukkit.ChatColor.GREEN + "Reconnected to party! Resuming: "
+                                + org.bukkit.ChatColor.AQUA + currentTrack.title()
+                                + org.bukkit.ChatColor.GRAY + " by "
+                                + org.bukkit.ChatColor.AQUA + currentTrack.artist()
+                                + org.bukkit.ChatColor.GRAY + " [" + formatMs(positionMs) + "]"
+                );
+
+                for (UUID memberId : party.getMembers()) {
+                    if (!memberId.equals(playerId)) {
+                        Player other = plugin.getServer().getPlayer(memberId);
+                        if (other != null && other.isOnline()) {
+                            other.sendMessage(
+                                    org.bukkit.ChatColor.YELLOW + player.getName()
+                                            + " reconnected to the party and resumed music."
+                            );
+                        }
+                    }
+                }
+
+                playback.syncNewPartyMember(player, party);
+                return;
+            }
+        }
+
+        if (sendQueryReply) {
+            sendReconnectStatus(player, (byte) 0, 0, null, null);
+        }
+    }
+
+    public void sendReconnectStatus(
+            Player player,
+            byte status,
+            long positionMs,
+            Track track,
+            MusicParty party
+    ) {
+        try {
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream(64);
+            try (DataOutputStream out = new DataOutputStream(bytes)) {
+                out.writeByte(OP_RECONNECT_STATUS);
+                out.writeByte(status);
+                out.writeLong(positionMs);
+
+                if (track != null) {
+                    out.writeLong(track.durationSeconds());
+                    byte[] titleBytes = track.title().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                    out.writeInt(titleBytes.length);
+                    out.write(titleBytes);
+
+                    byte[] artistBytes = track.artist().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                    out.writeInt(artistBytes.length);
+                    out.write(artistBytes);
+
+                    String ownerName = "";
+                    if (party != null && party.getOwner() != null) {
+                        Player ownerP = plugin.getServer().getPlayer(party.getOwner());
+                        ownerName = (ownerP != null) ? ownerP.getName() : party.getOwner().toString();
+                    }
+                    byte[] ownerBytes = ownerName.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                    out.writeInt(ownerBytes.length);
+                    out.write(ownerBytes);
+                } else {
+                    out.writeLong(0L);
+                    out.writeInt(0);
+                    out.writeInt(0);
+                    out.writeInt(0);
+                }
+            }
+
+            player.sendPluginMessage(plugin, CHANNEL, bytes.toByteArray());
+        } catch (IOException e) {
+            plugin.getLogger().warning("Failed to send OP_RECONNECT_STATUS to " + player.getName() + ": " + e.getMessage());
+        }
+    }
+
+    private static String formatMs(long ms) {
+        long sec = ms / 1000;
+        return String.format("%02d:%02d", sec / 60, sec % 60);
     }
 
     @EventHandler

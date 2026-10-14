@@ -64,12 +64,13 @@ public final class MusicPartyListener implements Listener {
                             + "."
             );
         } else if (result.gracePeriodStarted()) {
+            String notice = result.wasOwner()
+                    ? (ChatColor.YELLOW + event.getPlayer().getName() + " disconnected. Party ownership will transfer if they do not return soon.")
+                    : (ChatColor.YELLOW + event.getPlayer().getName() + " disconnected. Keeping their party spot for a few minutes.");
             notifyRemaining(
                     party,
                     result.player(),
-                    ChatColor.YELLOW
-                            + event.getPlayer().getName()
-                            + " disconnected. The party will be transferred if they do not return soon."
+                    notice
             );
         } else {
             notifyRemaining(

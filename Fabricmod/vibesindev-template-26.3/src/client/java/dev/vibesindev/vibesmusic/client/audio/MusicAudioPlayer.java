@@ -33,7 +33,12 @@ public final class MusicAudioPlayer {
     private static final long INITIAL_BUFFER_BYTES =
             256L * 1024L;
 
-    private static final long RECOVERY_REWIND_SECONDS = 2L;
+    /**
+     * Rewind amount when recovering from an unexpected sound stop (e.g. dimension switch).
+     * Set to 250ms (0.25s) to compensate for OpenAL's in-flight buffer queue without
+     * repeating audible music phrases or losing your place in the track.
+     */
+    private static final long RECOVERY_REWIND_MILLIS = 250L;
 
     private static final long RECOVERY_TIMEOUT_MILLIS = 6000L;
 
@@ -306,8 +311,8 @@ public final class MusicAudioPlayer {
                         playedPcmBytes
                                 - Math.max(
                                 0,
-                                lastBytesPerSecond
-                                        * RECOVERY_REWIND_SECONDS
+                                (lastBytesPerSecond
+                                        * RECOVERY_REWIND_MILLIS) / 1000L
                         )
                 );
 
@@ -572,8 +577,8 @@ public final class MusicAudioPlayer {
         long rewindBytes =
                 Math.max(
                         0,
-                        bytesPerSecond
-                                * RECOVERY_REWIND_SECONDS
+                        (bytesPerSecond
+                                * RECOVERY_REWIND_MILLIS) / 1000L
                 );
 
         recoveryTargetBytes =

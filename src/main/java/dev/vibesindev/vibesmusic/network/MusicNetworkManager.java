@@ -483,80 +483,84 @@ public final class MusicNetworkManager
             return;
         }
 
-        try (java.io.DataInputStream in = new java.io.DataInputStream(new java.io.ByteArrayInputStream(message))) {
-            byte opcode = in.readByte();
+        byte opcode = message[0];
 
-            if (opcode == OP_HELLO) {
-                int version = 0;
-                if (in.available() >= 4) {
-                    version = in.readInt();
-                }
-
-                if (version != PROTOCOL_VERSION) {
-                    plugin.getLogger().warning(
-                            "VibesInDev client protocol mismatch for "
-                                    + player.getName()
-                                    + ": client="
-                                    + version
-                                    + ", server="
-                                    + PROTOCOL_VERSION
-                    );
-                    return;
-                }
-
-                supportedPlayers.add(player.getUniqueId());
-                sendHelloAck(player);
-                // Send persistent saved volume to client immediately
-                sendVolume(player, getVolume(player));
-
-                plugin.getLogger().info(
-                        "VibesInDev Fabric client detected: "
-                                + player.getName()
-                );
-
-                // Auto-sync fallback: if client is in a party that's currently playing, resume them
-                plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
-                    if (player.isOnline() && isSupported(player) && !streamer.isPlaying(player)) {
-                        handleReconnectResume(player, false);
-                    }
-                }, 5L);
-            } else if (opcode == OP_RECONNECT_QUERY) {
-                handleReconnectQuery(player);
-            } else if (opcode == OP_END) {
-                if (in.available() >= 16) {
-                    long msb = in.readLong();
-                    long lsb = in.readLong();
-                    UUID streamId = new java.util.UUID(msb, lsb);
-                    streamer.handleClientEnd(player, streamId);
-                } else {
-                    streamer.handleClientEndLegacy(player);
-                }
+        if (opcode == OP_HELLO) {
+            int version = 0;
+            if (message.length >= 5) {
+                version = ((message[1] & 0xFF) << 24)
+                        | ((message[2] & 0xFF) << 16)
+                        | ((message[3] & 0xFF) << 8)
+                        | (message[4] & 0xFF);
             }
-        } catch (java.io.IOException ignored) {
+
+            if (version != PROTOCOL_VERSION) {
+                plugin.getLogger().warning(
+                        "VibesInDev client protocol mismatch for "
+                                + player.getName()
+                                + ": client="
+                                + version
+                                + ", server="
+                                + PROTOCOL_VERSION
+                );
+                return;
+            }
+
+            supportedPlayers.add(player.getUniqueId());
+            sendHelloAck(player);
+            // Send persistent saved volume to client immediately
+            sendVolume(player, getVolume(player));
+
+            plugin.getLogger().info(
+                    "VibesInDev Fabric client detected: "
+                            + player.getName()
+            );
+
+            // Auto-sync fallback: if client is in a party that's currently playing, resume them
+            plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
+                if (player.isOnline() && isSupported(player) && !streamer.isPlaying(player)) {
+                    handleReconnectResume(player, false);
+                }
+            }, 5L);
+        } else if (opcode == OP_RECONNECT_QUERY) {
+            handleReconnectQuery(player);
+        } else if (opcode == OP_END) {
+            if (message.length >= 17) {
+                long msb = (((long) message[1] & 0xFF) << 56)
+                        | (((long) message[2] & 0xFF) << 48)
+                        | (((long) message[3] & 0xFF) << 40)
+                        | (((long) message[4] & 0xFF) << 32)
+                        | (((long) message[5] & 0xFF) << 24)
+                        | (((long) message[6] & 0xFF) << 16)
+                        | (((long) message[7] & 0xFF) << 8)
+                        | ((long) message[8] & 0xFF);
+                long lsb = (((long) message[9] & 0xFF) << 56)
+                        | (((long) message[10] & 0xFF) << 48)
+                        | (((long) message[11] & 0xFF) << 40)
+                        | (((long) message[12] & 0xFF) << 32)
+                        | (((long) message[13] & 0xFF) << 24)
+                        | (((long) message[14] & 0xFF) << 16)
+                        | (((long) message[15] & 0xFF) << 8)
+                        | ((long) message[16] & 0xFF);
+                UUID streamId = new UUID(msb, lsb);
+                streamer.handleClientEnd(player, streamId);
+            } else {
+                streamer.handleClientEndLegacy(player);
+            }
         }
     }
 
     private void sendHelloAck(
             Player player
     ) {
-
-        ByteArrayOutputStream bytes =
-                new ByteArrayOutputStream(5);
-
-        try (DataOutputStream out =
-                     new DataOutputStream(bytes)) {
-
-            out.writeByte(OP_HELLO_ACK);
-            out.writeInt(PROTOCOL_VERSION);
-
-        } catch (IOException impossible) {
-            throw new IllegalStateException(impossible);
-        }
+        byte[] packet = new byte[5];
+        packet[0] = OP_HELLO_ACK;
+        writeIntBytes(packet, 1, PROTOCOL_VERSION);
 
         player.sendPluginMessage(
                 plugin,
                 CHANNEL,
-                bytes.toByteArray()
+                packet
         );
     }
 
@@ -625,33 +629,16 @@ public final class MusicNetworkManager
             byte[] data,
             int length
     ) {
-
-        ByteArrayOutputStream bytes =
-                new ByteArrayOutputStream(
-                        1 + 16 + 4 + length
-                );
-
-        try (DataOutputStream out =
-                     new DataOutputStream(bytes)) {
-
-            out.writeByte(OP_DATA);
-
-            writeUuid(
-                    out,
-                    streamId
-            );
-
-            out.writeInt(sequence);
-            out.write(data, 0, length);
-
-        } catch (IOException impossible) {
-            throw new IllegalStateException(impossible);
-        }
+        byte[] packet = new byte[21 + length];
+        packet[0] = OP_DATA;
+        writeUuidBytes(packet, 1, streamId);
+        writeIntBytes(packet, 17, sequence);
+        System.arraycopy(data, 0, packet, 21, length);
 
         player.sendPluginMessage(
                 plugin,
                 CHANNEL,
-                bytes.toByteArray()
+                packet
         );
     }
 
@@ -659,28 +646,14 @@ public final class MusicNetworkManager
             Player player,
             UUID streamId
     ) {
-
-        ByteArrayOutputStream bytes =
-                new ByteArrayOutputStream(17);
-
-        try (DataOutputStream out =
-                     new DataOutputStream(bytes)) {
-
-            out.writeByte(OP_END);
-
-            writeUuid(
-                    out,
-                    streamId
-            );
-
-        } catch (IOException impossible) {
-            throw new IllegalStateException(impossible);
-        }
+        byte[] packet = new byte[17];
+        packet[0] = OP_END;
+        writeUuidBytes(packet, 1, streamId);
 
         player.sendPluginMessage(
                 plugin,
                 CHANNEL,
-                bytes.toByteArray()
+                packet
         );
     }
 
@@ -688,28 +661,14 @@ public final class MusicNetworkManager
             Player player,
             UUID streamId
     ) {
-
-        ByteArrayOutputStream bytes =
-                new ByteArrayOutputStream(17);
-
-        try (DataOutputStream out =
-                     new DataOutputStream(bytes)) {
-
-            out.writeByte(OP_STOP);
-
-            writeUuid(
-                    out,
-                    streamId
-            );
-
-        } catch (IOException impossible) {
-            throw new IllegalStateException(impossible);
-        }
+        byte[] packet = new byte[17];
+        packet[0] = OP_STOP;
+        writeUuidBytes(packet, 1, streamId);
 
         player.sendPluginMessage(
                 plugin,
                 CHANNEL,
-                bytes.toByteArray()
+                packet
         );
     }
 
@@ -717,28 +676,14 @@ public final class MusicNetworkManager
             Player player,
             UUID streamId
     ) {
-
-        ByteArrayOutputStream bytes =
-                new ByteArrayOutputStream(17);
-
-        try (DataOutputStream out =
-                     new DataOutputStream(bytes)) {
-
-            out.writeByte(OP_PAUSE);
-
-            writeUuid(
-                    out,
-                    streamId
-            );
-
-        } catch (IOException impossible) {
-            throw new IllegalStateException(impossible);
-        }
+        byte[] packet = new byte[17];
+        packet[0] = OP_PAUSE;
+        writeUuidBytes(packet, 1, streamId);
 
         player.sendPluginMessage(
                 plugin,
                 CHANNEL,
-                bytes.toByteArray()
+                packet
         );
     }
 
@@ -747,29 +692,15 @@ public final class MusicNetworkManager
             UUID streamId,
             long positionMs
     ) {
-        ByteArrayOutputStream bytes =
-                new ByteArrayOutputStream(25);
-
-        try (DataOutputStream out =
-                     new DataOutputStream(bytes)) {
-
-            out.writeByte(OP_SEEK);
-
-            writeUuid(
-                    out,
-                    streamId
-            );
-            
-            out.writeLong(positionMs);
-
-        } catch (IOException impossible) {
-            throw new IllegalStateException(impossible);
-        }
+        byte[] packet = new byte[25];
+        packet[0] = OP_SEEK;
+        writeUuidBytes(packet, 1, streamId);
+        writeLongBytes(packet, 17, positionMs);
 
         player.sendPluginMessage(
                 plugin,
                 CHANNEL,
-                bytes.toByteArray()
+                packet
         );
     }
 
@@ -812,27 +743,14 @@ public final class MusicNetworkManager
             Player player,
             float volume
     ) {
-
-        ByteArrayOutputStream bytes =
-                new ByteArrayOutputStream(5);
-
-        try (DataOutputStream out =
-                     new DataOutputStream(bytes)) {
-
-            out.writeByte(OP_VOLUME);
-            out.writeFloat(volume);
-
-        } catch (IOException impossible) {
-
-            throw new IllegalStateException(
-                    impossible
-            );
-        }
+        byte[] packet = new byte[5];
+        packet[0] = OP_VOLUME;
+        writeIntBytes(packet, 1, Float.floatToIntBits(volume));
 
         player.sendPluginMessage(
                 plugin,
                 CHANNEL,
-                bytes.toByteArray()
+                packet
         );
     }
 
@@ -840,29 +758,55 @@ public final class MusicNetworkManager
             Player player,
             UUID streamId
     ) {
-
-        ByteArrayOutputStream bytes =
-                new ByteArrayOutputStream(17);
-
-        try (DataOutputStream out =
-                     new DataOutputStream(bytes)) {
-
-            out.writeByte(OP_RESUME);
-
-            writeUuid(
-                    out,
-                    streamId
-            );
-
-        } catch (IOException impossible) {
-            throw new IllegalStateException(impossible);
-        }
+        byte[] packet = new byte[17];
+        packet[0] = OP_RESUME;
+        writeUuidBytes(packet, 1, streamId);
 
         player.sendPluginMessage(
                 plugin,
                 CHANNEL,
-                bytes.toByteArray()
+                packet
         );
+    }
+
+    private static void writeUuidBytes(byte[] dest, int offset, UUID uuid) {
+        long msb = uuid.getMostSignificantBits();
+        dest[offset] = (byte) (msb >>> 56);
+        dest[offset + 1] = (byte) (msb >>> 48);
+        dest[offset + 2] = (byte) (msb >>> 40);
+        dest[offset + 3] = (byte) (msb >>> 32);
+        dest[offset + 4] = (byte) (msb >>> 24);
+        dest[offset + 5] = (byte) (msb >>> 16);
+        dest[offset + 6] = (byte) (msb >>> 8);
+        dest[offset + 7] = (byte) msb;
+
+        long lsb = uuid.getLeastSignificantBits();
+        dest[offset + 8] = (byte) (lsb >>> 56);
+        dest[offset + 9] = (byte) (lsb >>> 48);
+        dest[offset + 10] = (byte) (lsb >>> 40);
+        dest[offset + 11] = (byte) (lsb >>> 32);
+        dest[offset + 12] = (byte) (lsb >>> 24);
+        dest[offset + 13] = (byte) (lsb >>> 16);
+        dest[offset + 14] = (byte) (lsb >>> 8);
+        dest[offset + 15] = (byte) lsb;
+    }
+
+    private static void writeLongBytes(byte[] dest, int offset, long val) {
+        dest[offset] = (byte) (val >>> 56);
+        dest[offset + 1] = (byte) (val >>> 48);
+        dest[offset + 2] = (byte) (val >>> 40);
+        dest[offset + 3] = (byte) (val >>> 32);
+        dest[offset + 4] = (byte) (val >>> 24);
+        dest[offset + 5] = (byte) (val >>> 16);
+        dest[offset + 6] = (byte) (val >>> 8);
+        dest[offset + 7] = (byte) val;
+    }
+
+    private static void writeIntBytes(byte[] dest, int offset, int val) {
+        dest[offset] = (byte) (val >>> 24);
+        dest[offset + 1] = (byte) (val >>> 16);
+        dest[offset + 2] = (byte) (val >>> 8);
+        dest[offset + 3] = (byte) val;
     }
 
     private static void writeUuid(

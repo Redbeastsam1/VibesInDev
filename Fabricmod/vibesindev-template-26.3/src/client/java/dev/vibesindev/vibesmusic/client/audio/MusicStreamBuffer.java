@@ -274,21 +274,21 @@ public final class MusicStreamBuffer {
         private long lastDataSeenNanos =
                 System.nanoTime();
 
+        private final byte[] singleByteBuffer = new byte[1];
+
         private StreamInputStream(StreamSession session) {
             this.session = session;
         }
 
         @Override
         public int read() throws IOException {
-            byte[] one = new byte[1];
-
-            int count = read(one, 0, 1);
+            int count = read(singleByteBuffer, 0, 1);
 
             if (count == -1) {
                 return -1;
             }
 
-            return one[0] & 0xFF;
+            return singleByteBuffer[0] & 0xFF;
         }
 
         @Override

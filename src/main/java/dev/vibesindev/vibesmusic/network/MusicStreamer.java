@@ -6,13 +6,17 @@ import org.bukkit.ChatColor;
 import org.bukkit.entity.Player;
 
 import java.io.IOException;
-import java.io.RandomAccessFile;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.util.Arrays;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 final class MusicStreamer {
 
@@ -119,12 +123,25 @@ final class MusicStreamer {
         UUID streamId =
                 UUID.randomUUID();
 
+        FileChannel channel;
+        try {
+            channel = FileChannel.open(file, StandardOpenOption.READ);
+        } catch (IOException e) {
+            player.sendMessage(
+                    ChatColor.RED
+                            + "Could not open audio file: "
+                            + e.getMessage()
+            );
+            return false;
+        }
+
         StreamSession session =
                 new StreamSession(
                         player.getUniqueId(),
                         streamId,
                         track,
                         file,
+                        channel,
                         chunkSize,
                         totalChunks,
                         totalBytes
@@ -165,6 +182,7 @@ final class MusicStreamer {
         }
 
         session.cancelled = true;
+        session.close();
 
         if (network.isSupported(player)
                 && player.isOnline()) {
@@ -182,6 +200,7 @@ final class MusicStreamer {
                 sessions.values()) {
 
             session.cancelled = true;
+            session.close();
         }
 
         sessions.clear();
@@ -304,7 +323,7 @@ final class MusicStreamer {
         try {
 
             chunk = readChunk(
-                    session.file,
+                    session,
                     offset,
                     session.chunkSize
             );
@@ -397,7 +416,7 @@ final class MusicStreamer {
                             try {
 
                                 return readChunk(
-                                        session.file,
+                                        session,
                                         offset,
                                         session.chunkSize
                                 );
@@ -422,14 +441,20 @@ final class MusicStreamer {
                                                         return;
                                                     }
 
-                                                    if (error != null
-                                                            || chunk == null) {
+                                                    if (error != null) {
 
                                                         fail(
                                                                 session,
                                                                 error
                                                         );
 
+                                                        return;
+                                                    }
+
+                                                    if (chunk == null
+                                                            || chunk.length == 0) {
+
+                                                        finish(session);
                                                         return;
                                                     }
 
@@ -518,6 +543,7 @@ final class MusicStreamer {
         }
 
         session.finished = true;
+        session.close();
 
         Player player =
                 plugin.getServer()
@@ -566,6 +592,7 @@ final class MusicStreamer {
         }
 
         sessions.remove(player.getUniqueId(), session);
+        session.close();
 
         network.onStreamFinished(
                 player,
@@ -577,6 +604,7 @@ final class MusicStreamer {
     void handleClientEndLegacy(Player player) {
         StreamSession session = sessions.remove(player.getUniqueId());
         if (session != null) {
+            session.close();
             network.onStreamFinished(player, session.streamId, session.track);
         }
     }
@@ -596,6 +624,7 @@ final class MusicStreamer {
         );
 
         session.cancelled = true;
+        session.close();
 
         Player player =
                 plugin.getServer()
@@ -629,6 +658,7 @@ final class MusicStreamer {
     ) {
 
         session.cancelled = true;
+        session.close();
 
         sessions.remove(
                 session.playerId,
@@ -637,66 +667,49 @@ final class MusicStreamer {
     }
 
     private static byte[] readChunk(
-            Path file,
+            StreamSession session,
             long offset,
             int chunkSize
     ) throws IOException {
 
-        try (RandomAccessFile input =
-                     new RandomAccessFile(
-                             file.toFile(),
-                             "r"
-                     )) {
-
-            input.seek(offset);
-
-            int remaining =
-                    (int) Math.min(
-                            chunkSize,
-                            input.length() - offset
-                    );
-
-            if (remaining <= 0) {
-                return new byte[0];
-            }
-
-            byte[] buffer =
-                    new byte[remaining];
-
-            int read =
-                    input.read(
-                            buffer
-                    );
-
-            if (read <= 0) {
-                return new byte[0];
-            }
-
-            if (read == buffer.length) {
-                return buffer;
-            }
-
-            byte[] result =
-                    new byte[read];
-
-            System.arraycopy(
-                    buffer,
-                    0,
-                    result,
-                    0,
-                    read
-            );
-
-            return result;
+        FileChannel channel = session.channel;
+        if (channel == null || !channel.isOpen() || session.cancelled) {
+            return new byte[0];
         }
+
+        int remaining =
+                (int) Math.min(
+                        chunkSize,
+                        session.totalBytes - offset
+                );
+
+        if (remaining <= 0) {
+            return new byte[0];
+        }
+
+        ByteBuffer buffer = ByteBuffer.allocate(remaining);
+
+        while (buffer.hasRemaining()) {
+            int read = channel.read(buffer, offset + buffer.position());
+            if (read < 0) {
+                break;
+            }
+        }
+
+        if (buffer.position() == remaining) {
+            return buffer.array();
+        }
+
+        return Arrays.copyOf(buffer.array(), buffer.position());
     }
 
-    private static final class StreamSession {
+    private static final class StreamSession implements AutoCloseable {
 
         private final UUID playerId;
         private final UUID streamId;
         private final Track track;
         private final Path file;
+        private final FileChannel channel;
         private final int chunkSize;
         private final int totalChunks;
         private final long totalBytes;
@@ -706,12 +719,14 @@ final class MusicStreamer {
         private volatile boolean cancelled;
         private volatile boolean paused;
         private volatile boolean finished;
+        private final AtomicBoolean closed = new AtomicBoolean(false);
 
         private StreamSession(
                 UUID playerId,
                 UUID streamId,
                 Track track,
                 Path file,
+                FileChannel channel,
                 int chunkSize,
                 int totalChunks,
                 long totalBytes
@@ -721,9 +736,22 @@ final class MusicStreamer {
             this.streamId = streamId;
             this.track = track;
             this.file = file;
+            this.channel = channel;
             this.chunkSize = chunkSize;
             this.totalChunks = totalChunks;
             this.totalBytes = totalBytes;
+        }
+
+        @Override
+        public void close() {
+            if (closed.compareAndSet(false, true)) {
+                if (channel != null && channel.isOpen()) {
+                    try {
+                        channel.close();
+                    } catch (IOException ignored) {
+                    }
+                }
+            }
         }
     }
 }

@@ -73,6 +73,9 @@ public final class FFmpegManager {
                 List<String> command = List.of(
                         executable,
                         "-y",
+                        "-nostdin",
+                        "-hide_banner",
+                        "-loglevel", "error",
                         "-i", input.toString(),
                         "-vn",
                         "-ar", Integer.toString(sampleRate),

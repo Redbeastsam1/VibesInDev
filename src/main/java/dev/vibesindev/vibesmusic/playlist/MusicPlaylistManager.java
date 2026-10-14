@@ -119,7 +119,7 @@ public final class MusicPlaylistManager {
         Map<String, CustomPlaylist> userMap = playlists.computeIfAbsent(player, k -> new ConcurrentHashMap<>());
         String key = name.toLowerCase(Locale.ROOT).trim();
         userMap.put(key, new CustomPlaylist(name.trim(), System.currentTimeMillis(), new ArrayList<>(tracks)));
-        save();
+        plugin.getServer().getScheduler().runTaskAsynchronously(plugin, this::save);
         return true;
     }
 
@@ -160,7 +160,7 @@ public final class MusicPlaylistManager {
             if (config != null) {
                 config.set(player.toString() + "." + key, null);
             }
-            save();
+            plugin.getServer().getScheduler().runTaskAsynchronously(plugin, this::save);
             return true;
         }
         return false;

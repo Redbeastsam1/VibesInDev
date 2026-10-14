@@ -222,6 +222,45 @@ public final class MusicNetwork {
         );
     }
 
+    private static UUID readUuid(byte[] data, int offset) {
+        long msb = (((long) data[offset] & 0xFF) << 56)
+                | (((long) data[offset + 1] & 0xFF) << 48)
+                | (((long) data[offset + 2] & 0xFF) << 40)
+                | (((long) data[offset + 3] & 0xFF) << 32)
+                | (((long) data[offset + 4] & 0xFF) << 24)
+                | (((long) data[offset + 5] & 0xFF) << 16)
+                | (((long) data[offset + 6] & 0xFF) << 8)
+                | ((long) data[offset + 7] & 0xFF);
+
+        long lsb = (((long) data[offset + 8] & 0xFF) << 56)
+                | (((long) data[offset + 9] & 0xFF) << 48)
+                | (((long) data[offset + 10] & 0xFF) << 40)
+                | (((long) data[offset + 11] & 0xFF) << 32)
+                | (((long) data[offset + 12] & 0xFF) << 24)
+                | (((long) data[offset + 13] & 0xFF) << 16)
+                | (((long) data[offset + 14] & 0xFF) << 8)
+                | ((long) data[offset + 15] & 0xFF);
+
+        return new UUID(msb, lsb);
+    }
+
+    private static int readInt(byte[] data, int offset) {
+        return ((data[offset] & 0xFF) << 24)
+                | ((data[offset + 1] & 0xFF) << 16)
+                | ((data[offset + 2] & 0xFF) << 8)
+                | (data[offset + 3] & 0xFF);
+    }
+
+    private static long readLong(byte[] data, int offset) {
+        return (((long) data[offset] & 0xFF) << 56)
+                | (((long) data[offset + 1] & 0xFF) << 48)
+                | (((long) data[offset + 2] & 0xFF) << 40)
+                | (((long) data[offset + 3] & 0xFF) << 32)
+                | (((long) data[offset + 4] & 0xFF) << 24)
+                | (((long) data[offset + 5] & 0xFF) << 16)
+                | (((long) data[offset + 6] & 0xFF) << 8)
+                | ((long) data[offset + 7] & 0xFF);
+    }
     private static void handleData(
             byte[] data
     ) throws IOException {
@@ -230,22 +269,8 @@ public final class MusicNetwork {
             return;
         }
 
-        DataInputStream in =
-                new DataInputStream(
-                        new ByteArrayInputStream(
-                                data,
-                                1,
-                                data.length - 1
-                        )
-                );
-
-        UUID streamId =
-                new UUID(
-                        in.readLong(),
-                        in.readLong()
-                );
-
-        int sequence = in.readInt();
+        UUID streamId = readUuid(data, 1);
+        int sequence = readInt(data, 17);
 
         int headerSize = 1 + 16 + 4;
         int audioLength = data.length - headerSize;
@@ -284,20 +309,7 @@ public final class MusicNetwork {
             return;
         }
 
-        DataInputStream in =
-                new DataInputStream(
-                        new ByteArrayInputStream(
-                                data,
-                                1,
-                                data.length - 1
-                        )
-                );
-
-        UUID streamId =
-                new UUID(
-                        in.readLong(),
-                        in.readLong()
-                );
+        UUID streamId = readUuid(data, 1);
 
         MusicStreamBuffer.end(streamId);
 
@@ -314,20 +326,7 @@ public final class MusicNetwork {
             return;
         }
 
-        DataInputStream in =
-                new DataInputStream(
-                        new ByteArrayInputStream(
-                                data,
-                                1,
-                                data.length - 1
-                        )
-                );
-
-        UUID streamId =
-                new UUID(
-                        in.readLong(),
-                        in.readLong()
-                );
+        UUID streamId = readUuid(data, 1);
 
         Minecraft.getInstance().execute(
                 () -> {
@@ -349,20 +348,7 @@ public final class MusicNetwork {
             return;
         }
 
-        DataInputStream in =
-                new DataInputStream(
-                        new ByteArrayInputStream(
-                                data,
-                                1,
-                                data.length - 1
-                        )
-                );
-
-        UUID streamId =
-                new UUID(
-                        in.readLong(),
-                        in.readLong()
-                );
+        UUID streamId = readUuid(data, 1);
 
         MusicStreamBuffer.StreamSession session =
                 MusicStreamBuffer.current();
@@ -389,20 +375,7 @@ public final class MusicNetwork {
             return;
         }
 
-        DataInputStream in =
-                new DataInputStream(
-                        new ByteArrayInputStream(
-                                data,
-                                1,
-                                data.length - 1
-                        )
-                );
-
-        UUID streamId =
-                new UUID(
-                        in.readLong(),
-                        in.readLong()
-                );
+        UUID streamId = readUuid(data, 1);
 
         MusicStreamBuffer.StreamSession session =
                 MusicStreamBuffer.current();
@@ -429,20 +402,12 @@ public final class MusicNetwork {
             return;
         }
 
-        DataInputStream in =
-                new DataInputStream(
-                        new ByteArrayInputStream(
-                                data,
-                                1,
-                                data.length - 1
-                        )
-                );
-
+        int bits = readInt(data, 1);
         float volume = Math.max(
                 0.0F,
                 Math.min(
                         1.0F,
-                        in.readFloat()
+                        Float.intBitsToFloat(bits)
                 )
         );
 
@@ -466,22 +431,8 @@ public final class MusicNetwork {
             return;
         }
 
-        DataInputStream in =
-                new DataInputStream(
-                        new ByteArrayInputStream(
-                                data,
-                                1,
-                                data.length - 1
-                        )
-                );
-
-        UUID streamId =
-                new UUID(
-                        in.readLong(),
-                        in.readLong()
-                );
-
-        long positionMs = in.readLong();
+        UUID streamId = readUuid(data, 1);
+        long positionMs = readLong(data, 17);
 
         MusicStreamBuffer.StreamSession session =
                 MusicStreamBuffer.current();
@@ -546,31 +497,35 @@ public final class MusicNetwork {
             return;
         }
 
-        try {
-            ByteArrayOutputStream bytes =
-                    new ByteArrayOutputStream(17);
+        byte[] packet = new byte[17];
+        packet[0] = OP_END;
+        long msb = streamId.getMostSignificantBits();
+        packet[1] = (byte) (msb >>> 56);
+        packet[2] = (byte) (msb >>> 48);
+        packet[3] = (byte) (msb >>> 40);
+        packet[4] = (byte) (msb >>> 32);
+        packet[5] = (byte) (msb >>> 24);
+        packet[6] = (byte) (msb >>> 16);
+        packet[7] = (byte) (msb >>> 8);
+        packet[8] = (byte) msb;
 
-            try (DataOutputStream out =
-                         new DataOutputStream(bytes)) {
+        long lsb = streamId.getLeastSignificantBits();
+        packet[9] = (byte) (lsb >>> 56);
+        packet[10] = (byte) (lsb >>> 48);
+        packet[11] = (byte) (lsb >>> 40);
+        packet[12] = (byte) (lsb >>> 32);
+        packet[13] = (byte) (lsb >>> 24);
+        packet[14] = (byte) (lsb >>> 16);
+        packet[15] = (byte) (lsb >>> 8);
+        packet[16] = (byte) lsb;
 
-                out.writeByte(OP_END);
-                out.writeLong(streamId.getMostSignificantBits());
-                out.writeLong(streamId.getLeastSignificantBits());
-            }
-
-            Minecraft minecraft = Minecraft.getInstance();
-            if (minecraft.getConnection() != null) {
-                ClientPlayNetworking.send(
-                        new MusicPayload(bytes.toByteArray())
-                );
-                System.out.println(
-                        "[VibesInDev] Sent playback-finished signal to server for stream " + streamId
-                );
-            }
-
-        } catch (IOException e) {
-            System.err.println(
-                    "[VibesInDev] Failed to send playback-finished: " + e.getMessage()
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.getConnection() != null) {
+            ClientPlayNetworking.send(
+                    new MusicPayload(packet)
+            );
+            System.out.println(
+                    "[VibesInDev] Sent playback-finished signal to server for stream " + streamId
             );
         }
     }
@@ -579,19 +534,10 @@ public final class MusicNetwork {
      * Sends OP_RECONNECT_QUERY to the server, asking if any party music is playing.
      */
     public static void sendReconnectQuery() {
-        try {
-            ByteArrayOutputStream bytes = new ByteArrayOutputStream(1);
-            try (DataOutputStream out = new DataOutputStream(bytes)) {
-                out.writeByte(OP_RECONNECT_QUERY);
-            }
-
-            Minecraft mc = Minecraft.getInstance();
-            if (mc.getConnection() != null) {
-                ClientPlayNetworking.send(new MusicPayload(bytes.toByteArray()));
-                System.out.println("[VibesInDev] Sent party music reconnect query to server.");
-            }
-        } catch (IOException e) {
-            System.err.println("[VibesInDev] Failed to send reconnect query: " + e.getMessage());
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.getConnection() != null) {
+            ClientPlayNetworking.send(new MusicPayload(new byte[]{OP_RECONNECT_QUERY}));
+            System.out.println("[VibesInDev] Sent party music reconnect query to server.");
         }
     }
 

@@ -41,21 +41,16 @@ public final class ProcessRunner {
         );
         activeProcesses.put(pid, active);
 
-        ByteArrayOutputStream stdout = new ByteArrayOutputStream();
-        ByteArrayOutputStream stderr = new ByteArrayOutputStream();
+        ByteArrayOutputStream stdout = new ByteArrayOutputStream(2048);
+        ByteArrayOutputStream stderr = new ByteArrayOutputStream(512);
 
-        Thread stdoutThread = new Thread(
-                () -> copy(process.getInputStream(), stdout),
-                "vibesindev-process-stdout"
-        );
+        Thread stdoutThread = Thread.ofVirtual()
+                .name("vibesindev-process-stdout")
+                .start(() -> copy(process.getInputStream(), stdout));
 
-        Thread stderrThread = new Thread(
-                () -> copy(process.getErrorStream(), stderr),
-                "vibesindev-process-stderr"
-        );
-
-        stdoutThread.start();
-        stderrThread.start();
+        Thread stderrThread = Thread.ofVirtual()
+                .name("vibesindev-process-stderr")
+                .start(() -> copy(process.getErrorStream(), stderr));
 
         boolean finished = false;
         try {

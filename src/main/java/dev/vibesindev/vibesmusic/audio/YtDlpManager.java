@@ -48,6 +48,7 @@ public final class YtDlpManager {
     private List<String> baseArgs() {
         List<String> args = new ArrayList<>();
         args.add(executable);
+        args.add("--no-call-home");
         args.add("--ignore-config");
         args.add("--no-warnings");
 

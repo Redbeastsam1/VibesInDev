@@ -1,0 +1,59 @@
+tools:
+  yt-dlp: 'C:\Users\Samanyu S Barna\Desktop\Youtube downloader\yt-dlp.exe'
+  ffmpeg: "ffmpeg"
+  process-timeout-seconds: 300
+  # Optional: lets yt-dlp bypass age restrictions and regional blocks.
+  # Set ONE of these (leave both blank to disable).
+  # cookies-from-browser: "chrome"   # browser name: chrome, firefox, edge, safari, brave
+  cookies-from-browser: ""
+  # cookies-file: "C:/path/to/cookies.txt"  # Netscape-format cookies export
+  cookies-file: ""
+
+audio:
+  sample-rate: 48000
+  channels: 2
+  vorbis-quality: 5
+
+limits:
+  requests-per-minute: 10
+  max-track-duration-seconds: 3600
+  max-queue-size: 100
+  max-concurrent-downloads: 2
+  max-concurrent-ffmpeg: 2
+
+cache:
+  enabled: true
+  directory: "cache"
+  raw-directory: "raw"
+  max-size-gb: 20
+  cleanup-enabled: true
+
+spotify:
+  enabled: true
+  # App credentials from https://developer.spotify.com/dashboard
+  # Only client-id and client-secret are needed for track/playlist/album links.
+  # No user login required for public content.
+  client-id: ""
+  client-secret: ""
+  # redirect-uri is only used if you run /music spotify login for private playlists.
+  redirect-uri: "http://127.0.0.1:8888/callback"
+  # ISO 3166-1 alpha-2 market code (affects track availability)
+  market: "IN"
+  playlists:
+    # Maximum tracks to load from a playlist or album (prevents queue flood)
+    max-tracks: 500
+
+network:
+  # Audio is sent through the existing Minecraft connection.
+  chunk-size-bytes: 32768
+  chunks-per-tick: 1
+  protocol-version: 1
+
+playback:
+  synchronization:
+    enabled: true
+    position-sync-interval-ms: 5000
+    max-drift-ms: 750
+  preload-next: true
+
+

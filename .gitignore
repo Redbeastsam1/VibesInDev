@@ -1,0 +1,73 @@
+﻿# Compiled class files & Bytecode
+*.class
+
+# Log files
+*.log
+hs_err_pid*
+replay_*.log
+*.hprof
+*.jfr
+
+# Packaging & Archives
+*.jar
+*.war
+*.nar
+*.ear
+*.zip
+*.tar.gz
+*.rar
+*.7z
+# Allow Gradle and Maven wrappers
+!**/gradle/wrapper/gradle-wrapper.jar
+!**/.mvn/wrapper/maven-wrapper.jar
+
+# Maven Build Artifacts
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing/
+
+# Gradle Build Artifacts
+.gradle/
+**/build/
+!src/**/build/
+gradle-app.setting
+.gradletasknamecache
+
+# Fabric & Minecraft Run Environment
+**/run/
+**/classes/
+**/out/
+
+# IDE & Editor Files
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+*.sublime-project
+*.sublime-workspace
+.settings/
+.classpath
+.project
+bin/
+*.launch
+
+# OS Generated Files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Audio Cache & Working Directories
+cache/
+raw/
+*.tmp
+*.bak
+
+# Temporary / Scratch Files
+decompiled_hud.txt

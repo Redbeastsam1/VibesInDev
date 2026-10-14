@@ -1,0 +1,571 @@
+package dev.vibesindev.vibesmusic.client.network;
+
+import dev.vibesindev.vibesmusic.client.audio.MusicAudioPlayer;
+import dev.vibesindev.vibesmusic.client.audio.MusicStreamBuffer;
+import dev.vibesindev.vibesmusic.network.MusicPayload;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
+import net.minecraft.client.Minecraft;
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
+import java.util.UUID;
+
+public final class MusicNetwork {
+
+    private static final byte OP_HELLO = 1;
+    private static final byte OP_HELLO_ACK = 2;
+    private static final byte OP_START = 3;
+    private static final byte OP_DATA = 4;
+    private static final byte OP_END = 5;
+    private static final byte OP_STOP = 6;
+    private static final byte OP_PAUSE = 7;
+    private static final byte OP_RESUME = 8;
+    private static final byte OP_VOLUME = 9;
+    private static final byte OP_SEEK = 10;
+    private static final byte OP_SYNC = 11;
+
+    private static final int PROTOCOL_VERSION = 1;
+
+    private MusicNetwork() {
+    }
+
+    public static void register() {
+        ClientPlayNetworking.registerGlobalReceiver(
+                MusicPayload.TYPE,
+                (payload, context) ->
+                        handleServerMessage(payload.data())
+        );
+
+        /*
+         * The server can no longer send OP_STOP after the client
+         * connection has been closed. Therefore disconnect handling
+         * must stop local VibesInDev playback explicitly.
+         *
+         * This is especially important for recovery: without this
+         * handler, MusicAudioPlayer sees the SoundInstance disappear
+         * and assumes Minecraft temporarily interrupted the sound,
+         * so it keeps rebuilding the decoder forever.
+         */
+        ClientPlayConnectionEvents.DISCONNECT.register(
+                (handler, client) -> {
+                    System.out.println(
+                            "[VibesInDev] Server connection closed. "
+                                    + "Stopping local music playback."
+                    );
+
+                    client.execute(() -> {
+                        MusicAudioPlayer.stop();
+                        MusicStreamBuffer.stopCurrent();
+                    });
+                }
+        );
+    }
+
+    public static void sendHello() {
+        try {
+            ByteArrayOutputStream bytes =
+                    new ByteArrayOutputStream(5);
+
+            try (DataOutputStream out =
+                         new DataOutputStream(bytes)) {
+
+                out.writeByte(OP_HELLO);
+                out.writeInt(PROTOCOL_VERSION);
+            }
+
+            ClientPlayNetworking.send(
+                    new MusicPayload(bytes.toByteArray())
+            );
+
+            System.out.println(
+                    "[VibesInDev] Sent Fabric client HELLO."
+            );
+
+        } catch (IOException e) {
+            throw new RuntimeException(
+                    "Could not create VibesInDev HELLO payload.",
+                    e
+            );
+        }
+    }
+
+    private static void handleServerMessage(byte[] data) {
+        if (data == null || data.length < 1) {
+            return;
+        }
+
+        int opcode = data[0] & 0xFF;
+
+        try {
+            switch (opcode) {
+                case OP_HELLO_ACK -> handleHelloAck(data);
+                case OP_START -> handleStart(data);
+                case OP_DATA -> handleData(data);
+                case OP_END -> handleEnd(data);
+                case OP_STOP -> handleStop(data);
+                case OP_PAUSE -> handlePause(data);
+                case OP_RESUME -> handleResume(data);
+                case OP_VOLUME -> handleVolume(data);
+                case OP_SEEK -> handleSeek(data);
+                case OP_SYNC -> handleSync(data);
+
+                default ->
+                        System.out.println(
+                                "[VibesInDev] Unknown music packet opcode: "
+                                        + opcode
+                        );
+            }
+
+        } catch (Exception e) {
+            System.err.println(
+                    "[VibesInDev] Failed to process music packet: "
+                            + e.getMessage()
+            );
+
+            e.printStackTrace();
+        }
+    }
+
+    private static void handleHelloAck(
+            byte[] data
+    ) throws IOException {
+
+        if (data.length < 5) {
+            return;
+        }
+
+        int version =
+                ((data[1] & 0xFF) << 24)
+                        | ((data[2] & 0xFF) << 16)
+                        | ((data[3] & 0xFF) << 8)
+                        | (data[4] & 0xFF);
+
+        System.out.println(
+                "[VibesInDev] Server HELLO_ACK received. Protocol "
+                        + version
+        );
+    }
+
+    private static void handleStart(
+            byte[] data
+    ) throws IOException {
+
+        DataInputStream in =
+                new DataInputStream(
+                        new ByteArrayInputStream(
+                                data,
+                                1,
+                                data.length - 1
+                        )
+                );
+
+        UUID streamId =
+                new UUID(
+                        in.readLong(),
+                        in.readLong()
+                );
+
+        long totalBytes = in.readLong();
+        int chunkSize = in.readInt();
+        int totalChunks = in.readInt();
+        long durationSeconds = in.readLong();
+
+        // Server sends title/artist as: int(length) + raw UTF-8 bytes
+        int titleLen = in.readInt();
+        byte[] titleBytes = new byte[titleLen];
+        in.readFully(titleBytes);
+        String title = new String(titleBytes, java.nio.charset.StandardCharsets.UTF_8);
+
+        int artistLen = in.readInt();
+        byte[] artistBytes = new byte[artistLen];
+        in.readFully(artistBytes);
+        String artist = new String(artistBytes, java.nio.charset.StandardCharsets.UTF_8);
+
+        System.out.println(
+                "[VibesInDev] MUSIC START: "
+                        + title
+                        + " - "
+                        + artist
+                        + " ("
+                        + durationSeconds
+                        + "s)"
+        );
+
+        System.out.println(
+                "[VibesInDev] Stream size: "
+                        + totalBytes
+                        + " bytes, "
+                        + totalChunks
+                        + " chunks."
+        );
+
+        System.out.println(
+                "[VibesInDev] Server chunk size: "
+                        + chunkSize
+        );
+
+        MusicStreamBuffer.begin(
+                streamId,
+                totalBytes,
+                title,
+                artist
+        );
+    }
+
+    private static void handleData(
+            byte[] data
+    ) throws IOException {
+
+        if (data.length < 21) {
+            return;
+        }
+
+        DataInputStream in =
+                new DataInputStream(
+                        new ByteArrayInputStream(
+                                data,
+                                1,
+                                data.length - 1
+                        )
+                );
+
+        UUID streamId =
+                new UUID(
+                        in.readLong(),
+                        in.readLong()
+                );
+
+        int sequence = in.readInt();
+
+        int headerSize = 1 + 16 + 4;
+        int audioLength = data.length - headerSize;
+
+        if (audioLength <= 0) {
+            return;
+        }
+
+        MusicStreamBuffer.append(
+                streamId,
+                sequence,
+                data,
+                headerSize,
+                audioLength
+        );
+
+        /*
+         * Network callbacks must not manipulate Minecraft's
+         * SoundManager directly. Schedule playback on the
+         * client thread.
+         */
+        if (MusicStreamBuffer.hasBufferedAtLeast(
+                256 * 1024
+        )) {
+            Minecraft.getInstance().execute(
+                    MusicAudioPlayer::play
+            );
+        }
+    }
+
+    private static void handleEnd(
+            byte[] data
+    ) throws IOException {
+
+        if (data.length < 17) {
+            return;
+        }
+
+        DataInputStream in =
+                new DataInputStream(
+                        new ByteArrayInputStream(
+                                data,
+                                1,
+                                data.length - 1
+                        )
+                );
+
+        UUID streamId =
+                new UUID(
+                        in.readLong(),
+                        in.readLong()
+                );
+
+        MusicStreamBuffer.end(streamId);
+
+        System.out.println(
+                "[VibesInDev] MUSIC END packet received."
+        );
+    }
+
+    private static void handleStop(
+            byte[] data
+    ) throws IOException {
+
+        if (data.length < 17) {
+            return;
+        }
+
+        DataInputStream in =
+                new DataInputStream(
+                        new ByteArrayInputStream(
+                                data,
+                                1,
+                                data.length - 1
+                        )
+                );
+
+        UUID streamId =
+                new UUID(
+                        in.readLong(),
+                        in.readLong()
+                );
+
+        Minecraft.getInstance().execute(
+                () -> {
+                    MusicAudioPlayer.stop();
+                    MusicStreamBuffer.stop(streamId);
+                }
+        );
+
+        System.out.println(
+                "[VibesInDev] MUSIC STOP packet received."
+        );
+    }
+
+    private static void handlePause(
+            byte[] data
+    ) throws IOException {
+
+        if (data.length < 17) {
+            return;
+        }
+
+        DataInputStream in =
+                new DataInputStream(
+                        new ByteArrayInputStream(
+                                data,
+                                1,
+                                data.length - 1
+                        )
+                );
+
+        UUID streamId =
+                new UUID(
+                        in.readLong(),
+                        in.readLong()
+                );
+
+        MusicStreamBuffer.StreamSession session =
+                MusicStreamBuffer.current();
+
+        if (session == null
+                || !session.streamId().equals(streamId)) {
+            return;
+        }
+
+        Minecraft.getInstance().execute(
+                MusicAudioPlayer::pause
+        );
+
+        System.out.println(
+                "[VibesInDev] MUSIC PAUSE packet received."
+        );
+    }
+
+    private static void handleResume(
+            byte[] data
+    ) throws IOException {
+
+        if (data.length < 17) {
+            return;
+        }
+
+        DataInputStream in =
+                new DataInputStream(
+                        new ByteArrayInputStream(
+                                data,
+                                1,
+                                data.length - 1
+                        )
+                );
+
+        UUID streamId =
+                new UUID(
+                        in.readLong(),
+                        in.readLong()
+                );
+
+        MusicStreamBuffer.StreamSession session =
+                MusicStreamBuffer.current();
+
+        if (session == null
+                || !session.streamId().equals(streamId)) {
+            return;
+        }
+
+        Minecraft.getInstance().execute(
+                MusicAudioPlayer::resume
+        );
+
+        System.out.println(
+                "[VibesInDev] MUSIC RESUME packet received."
+        );
+    }
+
+    private static void handleVolume(
+            byte[] data
+    ) throws IOException {
+
+        if (data.length < 5) {
+            return;
+        }
+
+        DataInputStream in =
+                new DataInputStream(
+                        new ByteArrayInputStream(
+                                data,
+                                1,
+                                data.length - 1
+                        )
+                );
+
+        float volume = Math.max(
+                0.0F,
+                Math.min(
+                        1.0F,
+                        in.readFloat()
+                )
+        );
+
+        Minecraft.getInstance().execute(
+                () -> MusicAudioPlayer.setVolume(volume)
+        );
+
+        System.out.println(
+                "[VibesInDev] Volume changed to "
+                        + Math.round(volume * 100.0F)
+                        + "%"
+        );
+    }
+
+    private static void handleSeek(
+            byte[] data
+    ) throws IOException {
+
+        // OP_SEEK: UUID(16) + positionMs(8)
+        if (data.length < 25) {
+            return;
+        }
+
+        DataInputStream in =
+                new DataInputStream(
+                        new ByteArrayInputStream(
+                                data,
+                                1,
+                                data.length - 1
+                        )
+                );
+
+        UUID streamId =
+                new UUID(
+                        in.readLong(),
+                        in.readLong()
+                );
+
+        long positionMs = in.readLong();
+
+        MusicStreamBuffer.StreamSession session =
+                MusicStreamBuffer.current();
+
+        if (session == null
+                || !session.streamId().equals(streamId)) {
+            return;
+        }
+
+        // Seek: stop current playback and resume from the requested position
+        Minecraft.getInstance().execute(
+                () -> MusicAudioPlayer.seekTo(positionMs)
+        );
+
+        System.out.println(
+                "[VibesInDev] MUSIC SEEK to " + positionMs + "ms received."
+        );
+    }
+
+    private static void handleSync(
+            byte[] data
+    ) throws IOException {
+
+        // OP_SYNC: sessionId(16) + trackId(UTF) + state(1) + positionMs(8)
+        if (data.length < 26) {
+            return;
+        }
+
+        DataInputStream in =
+                new DataInputStream(
+                        new ByteArrayInputStream(
+                                data,
+                                1,
+                                data.length - 1
+                        )
+                );
+
+        UUID sessionId =
+                new UUID(
+                        in.readLong(),
+                        in.readLong()
+                );
+
+        String trackId = in.readUTF();
+        byte state = in.readByte();
+        long positionMs = in.readLong();
+
+        System.out.println(
+                "[VibesInDev] SYNC: session=" + sessionId
+                        + " track=" + trackId
+                        + " state=" + state
+                        + " pos=" + positionMs + "ms"
+        );
+    }
+
+    /**
+     * Sends OP_END to the server, signalling that local playback has
+     * finished so the server can advance the queue to the next track.
+     */
+    public static void sendPlaybackFinished(UUID streamId) {
+        if (streamId == null) {
+            return;
+        }
+
+        try {
+            ByteArrayOutputStream bytes =
+                    new ByteArrayOutputStream(17);
+
+            try (DataOutputStream out =
+                         new DataOutputStream(bytes)) {
+
+                out.writeByte(OP_END);
+                out.writeLong(streamId.getMostSignificantBits());
+                out.writeLong(streamId.getLeastSignificantBits());
+            }
+
+            Minecraft minecraft = Minecraft.getInstance();
+            if (minecraft.getConnection() != null) {
+                ClientPlayNetworking.send(
+                        new MusicPayload(bytes.toByteArray())
+                );
+                System.out.println(
+                        "[VibesInDev] Sent playback-finished signal to server for stream " + streamId
+                );
+            }
+
+        } catch (IOException e) {
+            System.err.println(
+                    "[VibesInDev] Failed to send playback-finished: " + e.getMessage()
+            );
+        }
+    }
+}

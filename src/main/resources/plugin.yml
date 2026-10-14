@@ -1,0 +1,56 @@
+name: VibesInDev
+version: 0.6.0
+main: dev.vibesindev.vibesmusic.VibesInDevPlugin
+api-version: '26.3'
+author: VibesInDev
+description: Music source resolver and client-side playback backend.
+
+commands:
+  music:
+    description: VibesInDev music commands
+    usage: /music <play|queue|nowplaying|stop|skip|previous|shuffle|repeat|history|party|spotify|reload>
+    aliases: [vmusic, vb]
+
+permissions:
+  vibesindev.use:
+    description: Base permission (legacy, optional)
+    default: true
+  vibesindev.play:
+    description: Play music
+    default: true
+  vibesindev.queue:
+    description: Manage queue
+    default: true
+  vibesindev.skip:
+    description: Skip tracks
+    default: true
+  vibesindev.stop:
+    description: Stop playback
+    default: true
+  vibesindev.pause:
+    description: Pause playback
+    default: true
+  vibesindev.seek:
+    description: Seek playback
+    default: true
+  vibesindev.party.create:
+    description: Create parties
+    default: true
+  vibesindev.party.manage:
+    description: Manage parties
+    default: true
+  vibesindev.party.kick:
+    description: Kick from parties
+    default: true
+  vibesindev.party.transfer:
+    description: Transfer party ownership
+    default: true
+  vibesindev.spotify:
+    description: Play spotify tracks
+    default: true
+  vibesindev.spotify.playlist:
+    description: Play spotify playlists
+    default: true
+  vibesindev.admin:
+    description: Manage VibesInDev and Spotify authorization
+    default: op

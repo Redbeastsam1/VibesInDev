@@ -128,6 +128,24 @@ class MusicPlaybackManagerTest {
     }
 
     @Test
+    void testPrepareTrack_WhenCacheCorrupted_InvalidatesCache() {
+        // Arrange: cache has audio, but metadata title == artist (old regex bug)
+        Track requestedTrack = new Track("spotify1", "Real Title", "Real Artist", 200L, "");
+        Track corruptCached = new Track("spotify1", "Real Artist", "Real Artist", 200L, "spotify-lazy:Real Artist - Real Artist::200");
+        
+        when(cache.hasAudio("spotify1")).thenReturn(true);
+        when(cache.readMetadataQuietly("spotify1")).thenReturn(corruptCached);
+        when(plugin.ytDlp()).thenReturn(ytDlp);
+        when(ytDlp.downloadAudio(any(Track.class), any())).thenReturn(new CompletableFuture<>());
+
+        // Act: play track
+        playbackManager.play(player, requestedTrack);
+
+        // Assert: cache.invalidate was invoked for spotify1
+        verify(cache).invalidate("spotify1");
+    }
+
+    @Test
     void testStartTrack_StaleCallback_IsIgnored() {
         // Arrange
         Track requestedTrack = new Track("stale", "Stale", "Artist", 100L, "");

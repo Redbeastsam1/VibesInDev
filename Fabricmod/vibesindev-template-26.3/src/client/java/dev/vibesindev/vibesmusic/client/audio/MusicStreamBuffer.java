@@ -417,6 +417,12 @@ public final class MusicStreamBuffer {
             return copied;
         }
 
+        public boolean isEof() {
+            synchronized (session.lock) {
+                return session.ended && position >= session.receivedBytes;
+            }
+        }
+
         @Override
         public void close() {
             /*

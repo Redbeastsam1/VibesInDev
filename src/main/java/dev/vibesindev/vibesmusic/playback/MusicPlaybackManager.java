@@ -1663,11 +1663,31 @@ public final class MusicPlaybackManager {
     ) {
 
         if (plugin.cache().hasAudio(track.id())) {
-            plugin.getLogger().info("[VibesInDev] Cache HIT for track: " + track.id());
-            plugin.metrics().incrementCacheHits();
-            return CompletableFuture.completedFuture(
-                    plugin.cache().audio(track.id())
-            );
+            Track cached = plugin.cache().readMetadataQuietly(track.id());
+            if (cached != null) {
+                boolean titleMismatch = !track.title().equalsIgnoreCase(track.id())
+                        && !cached.title().equalsIgnoreCase(track.title());
+                boolean corruptOldRegex = cached.title().equalsIgnoreCase(cached.artist())
+                        && !track.title().equalsIgnoreCase(track.artist());
+                if (titleMismatch || corruptOldRegex) {
+                    plugin.getLogger().warning("[VibesInDev] Invalidating stale/corrupted cache for track: "
+                            + track.id() + " (cached: " + cached.title() + " - " + cached.artist()
+                            + ", requested: " + track.title() + " - " + track.artist() + ")");
+                    plugin.cache().invalidate(track.id());
+                } else {
+                    plugin.getLogger().info("[VibesInDev] Cache HIT for track: " + track.id());
+                    plugin.metrics().incrementCacheHits();
+                    return CompletableFuture.completedFuture(
+                            plugin.cache().audio(track.id())
+                    );
+                }
+            } else {
+                plugin.getLogger().info("[VibesInDev] Cache HIT for track: " + track.id());
+                plugin.metrics().incrementCacheHits();
+                return CompletableFuture.completedFuture(
+                        plugin.cache().audio(track.id())
+                );
+            }
         }
 
         plugin.getLogger().info("[VibesInDev] Cache MISS for track: " + track.id());
@@ -1676,11 +1696,7 @@ public final class MusicPlaybackManager {
             CompletableFuture<Track> resolvedTrackFuture;
 
             if (track.sourceUrl().startsWith("spotify-lazy:")) {
-                String[] parts = track.sourceUrl().substring(13).split("::", 2);
-                String query = parts[0];
-                long targetDuration = Long.parseLong(parts[1]);
-
-                resolvedTrackFuture = plugin.ytDlp().searchAndResolve(query, targetDuration)
+                resolvedTrackFuture = plugin.ytDlp().searchAndResolve(track.title(), track.artist(), track.durationSeconds())
                         .thenApply(realTrack -> new Track(
                                 track.id(), // Keep the Spotify ID so caching works correctly
                                 track.title(),

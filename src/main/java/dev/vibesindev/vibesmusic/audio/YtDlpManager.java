@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 
 public final class YtDlpManager {
@@ -48,9 +49,11 @@ public final class YtDlpManager {
     private List<String> baseArgs() {
         List<String> args = new ArrayList<>();
         args.add(executable);
-        args.add("--no-call-home");
+        args.add("--no-update");
         args.add("--ignore-config");
         args.add("--no-warnings");
+        args.add("--encoding");
+        args.add("utf-8");
 
         // Cookie support — lets yt-dlp bypass age restrictions and rate limits
         String cookiesFromBrowser = plugin.getConfig().getString("tools.cookies-from-browser", "");
@@ -269,54 +272,75 @@ public final class YtDlpManager {
     ) {
         if (query == null || query.isBlank()) {
             return CompletableFuture.failedFuture(
-                    new IllegalArgumentException(
-                            "Search query cannot be empty."
-                    )
+                    new IllegalArgumentException("Search query cannot be empty.")
             );
         }
 
-        if (targetDurationSeconds <= 0) {
-            return resolve("ytsearch1:" + query);
+        String title = query.trim();
+        String artist = null;
+        if (title.contains(" - ")) {
+            String[] parts = title.split(" - ", 2);
+            artist = parts[0].trim();
+            title = parts[1].trim();
+        }
+
+        return searchAndResolve(title, artist, targetDurationSeconds);
+    }
+
+    public CompletableFuture<Track> searchAndResolve(
+            String title,
+            String artist,
+            long targetDurationSeconds
+    ) {
+        if ((title == null || title.isBlank()) && (artist == null || artist.isBlank())) {
+            return CompletableFuture.failedFuture(
+                    new IllegalArgumentException("Search title/artist cannot be empty.")
+            );
         }
 
         return CompletableFuture.supplyAsync(() -> {
             try {
-                String printFormat =
-                        "%(id)s\t%(title)s\t%(uploader)s\t%(duration)s\t%(webpage_url)s";
+                String cleanTitle = (title != null) ? title.trim() : "";
+                String cleanArtist = (artist != null) ? artist.trim() : "";
+
+                // Formulate the highest-accuracy search query
+                String query;
+                if (!cleanArtist.isBlank() && !cleanTitle.isBlank()) {
+                    String primaryArtist = cleanArtist.split("[,&]|\\bfeat\\b|\\bft\\b")[0].trim();
+                    query = primaryArtist + " " + cleanTitle + " Audio";
+                } else if (!cleanTitle.isBlank()) {
+                    query = cleanTitle + " Audio";
+                } else {
+                    query = cleanArtist;
+                }
+
+                String printFormat = "%(id)s\t%(title)s\t%(uploader)s\t%(duration)s\t%(webpage_url)s";
 
                 List<String> args = baseArgs();
                 args.add("--no-playlist");
                 args.add("--flat-playlist");
                 args.add("--print");
                 args.add(printFormat);
-                args.add("ytsearch5:" + query);
+                args.add("ytsearch8:" + query);
 
                 ProcessRunner.Result result = ProcessRunner.run(args, timeout);
 
                 if (result.exitCode() != 0) {
                     plugin.metrics().incrementYtDlpFailures();
-                    throw new IllegalStateException(
-                            "yt-dlp resolve failed: "
-                                    + cleanError(result)
-                    );
+                    throw new IllegalStateException("yt-dlp resolve failed: " + cleanError(result));
                 }
 
                 Track bestMatch = null;
-                long bestDiff = Long.MAX_VALUE;
+                int bestScore = Integer.MIN_VALUE;
 
                 for (String line : result.stdout().split("\\R")) {
-                    if (line.isBlank()) {
-                        continue;
-                    }
+                    if (line.isBlank()) continue;
 
                     String[] parts = line.split("\t", 5);
-
-                    if (parts.length < 5) {
-                        continue;
-                    }
+                    if (parts.length < 5) continue;
 
                     String id = parts[0].trim();
-                    String title = parts[1].trim();
+                    String candTitle = parts[1].trim();
                     String uploader = parts[2].trim();
                     long duration = parseDuration(parts[3].trim());
                     String webpageUrl = parts[4].trim();
@@ -324,44 +348,154 @@ public final class YtDlpManager {
                     if (id.isBlank() || id.equalsIgnoreCase("NA") || id.equalsIgnoreCase("none")) {
                         continue;
                     }
+                    if (candTitle.isBlank() || candTitle.equalsIgnoreCase("NA") || candTitle.equalsIgnoreCase("none")) {
+                        candTitle = id;
+                    }
+                    if (uploader.isBlank() || uploader.equalsIgnoreCase("NA") || uploader.equalsIgnoreCase("none")) {
+                        uploader = "Unknown";
+                    }
+                    if (webpageUrl.isBlank() || webpageUrl.equalsIgnoreCase("NA") || webpageUrl.equalsIgnoreCase("none")) {
+                        webpageUrl = "https://www.youtube.com/watch?v=" + id;
+                    }
 
-                    long diff = Math.abs(duration - targetDurationSeconds);
-                    if (diff < bestDiff) {
-                        bestDiff = diff;
-                        
-                        if (title.isBlank() || title.equalsIgnoreCase("NA") || title.equalsIgnoreCase("none")) {
-                            title = id;
-                        }
-                        if (uploader.isBlank() || uploader.equalsIgnoreCase("NA") || uploader.equalsIgnoreCase("none")) {
-                            uploader = "Unknown";
-                        }
-                        if (webpageUrl.isBlank() || webpageUrl.equalsIgnoreCase("NA") || webpageUrl.equalsIgnoreCase("none")) {
-                            webpageUrl = "https://www.youtube.com/watch?v=" + id;
-                        }
+                    int score = scoreCandidate(candTitle, uploader, duration, cleanTitle, cleanArtist, targetDurationSeconds);
 
-                        bestMatch = new Track(id, title, uploader, duration, webpageUrl);
+                    if (score > bestScore) {
+                        bestScore = score;
+                        bestMatch = new Track(id, candTitle, uploader, duration, webpageUrl);
                     }
                 }
 
                 if (bestMatch == null) {
-                    throw new IllegalStateException(
-                            "yt-dlp returned no track information"
-                    );
+                    throw new IllegalStateException("yt-dlp returned no track information for: " + query);
                 }
+
+                plugin.getLogger().info("[VibesInDev] Selected best audio match: " + bestMatch.title()
+                        + " (" + bestMatch.durationSeconds() + "s) [Score: " + bestScore + "] for "
+                        + cleanArtist + " - " + cleanTitle);
 
                 checkDuration(bestMatch.durationSeconds());
                 return bestMatch;
 
             } catch (IOException | InterruptedException e) {
                 Thread.currentThread().interrupt();
-
-                throw new RuntimeException(
-                        "Could not run yt-dlp",
-                        e
-                );
+                throw new RuntimeException("Could not run yt-dlp", e);
             }
         }, resolutionExecutor);
     }
+
+    private int scoreCandidate(
+            String title,
+            String uploader,
+            long duration,
+            String targetTitle,
+            String targetArtist,
+            long targetDuration
+    ) {
+        int score = 1000;
+        String tLower = title.toLowerCase(Locale.ROOT);
+        String uLower = uploader.toLowerCase(Locale.ROOT);
+        String targetTLower = (targetTitle != null) ? targetTitle.toLowerCase(Locale.ROOT) : "";
+        String targetALower = (targetArtist != null) ? targetArtist.toLowerCase(Locale.ROOT) : "";
+
+        // 1. Title keyword matching
+        if (!targetTLower.isBlank()) {
+            String[] words = targetTLower.split("\\W+");
+            List<String> validWords = new ArrayList<>();
+            for (String w : words) {
+                if (w.length() >= 2) validWords.add(w);
+            }
+            if (!validWords.isEmpty()) {
+                int matched = 0;
+                for (String w : validWords) {
+                    if (tLower.contains(w)) matched++;
+                }
+                double ratio = (double) matched / validWords.size();
+                if (ratio >= 0.99) {
+                    score += 350;
+                } else if (ratio >= 0.5) {
+                    score += 150;
+                } else {
+                    score -= 600;
+                }
+            }
+        }
+
+        // 2. Primary artist match
+        if (!targetALower.isBlank()) {
+            String primaryArtist = targetALower.split("[,&]|\\bfeat\\b|\\bft\\b")[0].trim();
+            String[] aWords = primaryArtist.split("\\W+");
+            boolean artistFound = false;
+            for (String w : aWords) {
+                if (w.length() >= 2 && (uLower.contains(w) || tLower.contains(w))) {
+                    artistFound = true;
+                    break;
+                }
+            }
+            if (artistFound) {
+                if (uLower.contains(primaryArtist)) {
+                    score += 250;
+                } else {
+                    score += 150;
+                }
+            }
+        }
+
+        // 3. YouTube Music Topic channel bonus
+        if (uLower.endsWith(" - topic") || uLower.contains("topic")) {
+            score += 350;
+        }
+
+        // 4. Official Audio / Video bonus
+        if (tLower.contains("official audio") || tLower.contains("áudio oficial") || tLower.contains("audio oficial")
+                || tLower.contains("full audio") || tLower.contains("official track")) {
+            score += 250;
+        } else if (tLower.contains("official music video") || tLower.contains("official video")
+                || tLower.contains("clip officiel") || tLower.contains("music video")) {
+            score += 180;
+        } else if (tLower.contains("audio") || tLower.contains("lyrics") || tLower.contains("lyric video") || tLower.contains("letra")) {
+            score += 100;
+        }
+
+        // 5. Negative keywords (unless asked for in target title)
+        String[][] penalties = {
+                {"translation", "700"}, {"translated", "700"}, {"terjemahan", "700"},
+                {"reaction", "1200"}, {"slowed", "500"}, {"reverb", "500"},
+                {"8d audio", "500"}, {"bass boosted", "500"}, {"cover", "600"},
+                {"karaoke", "500"}, {"instrumental", "500"}, {"live", "350"},
+                {"compilation", "1200"}, {"full album", "1200"}, {"mashup", "700"},
+                {"edit", "500"}, {"amv", "500"}, {"clip", "400"}, {"scene", "500"},
+                {"fight", "600"}, {"gameplay", "800"}, {"montage", "600"}, {"tiktok", "300"}
+        };
+        for (String[] p : penalties) {
+            String word = p[0];
+            int penalty = Integer.parseInt(p[1]);
+            if (tLower.contains(word) && !targetTLower.contains(word)) {
+                score -= penalty;
+            }
+        }
+
+        // 6. Duration difference scoring
+        if (targetDuration > 0 && duration > 0) {
+            long diff = Math.abs(duration - targetDuration);
+            if (diff <= 3) {
+                score += 200;
+            } else if (diff <= 8) {
+                score += 120;
+            } else if (diff <= 15) {
+                score += 60;
+            } else if (diff <= 30) {
+                score += 0;
+            } else if (diff <= 60) {
+                score -= 250;
+            } else {
+                score -= Math.min(1500, (int) diff * 12);
+            }
+        }
+
+        return score;
+    }
+
 
     public boolean isPlaylistUrl(String input) {
         if (input == null || input.isBlank()) {

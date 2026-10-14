@@ -458,12 +458,10 @@ public final class MusicAudioPlayer {
         }
 
         /*
-         * The sound instance is no longer active.
-         *
-         * If the complete OGG stream has been received and the
-         * decoder has reached the end, this is normal completion.
+         * The sound instance is no longer active in Minecraft's SoundManager.
+         * Check if it actually finished playing naturally to the very end of the track.
          */
-        if (MusicStreamBuffer.isFinished()) {
+        if (sound.isPlaybackCompleted()) {
 
             java.util.UUID finishedStreamId = currentStreamId;
 
@@ -480,7 +478,7 @@ public final class MusicAudioPlayer {
             recoveryStartedAtMillis = 0;
 
             System.out.println(
-                    "[VibesInDev] Minecraft streaming audio playback finished."
+                    "[VibesInDev] Minecraft streaming audio playback finished naturally."
             );
 
             // Signal the server so it advances the queue / plays the next track
@@ -490,13 +488,17 @@ public final class MusicAudioPlayer {
         }
 
         /*
-         * The sound disappeared while the network stream is still
-         * active. Start the recovery process.
+         * Sound instance was stopped before reaching EOF (e.g. dimension switch / level unload,
+         * sound system reload F3+T, or audio device reset).
+         * Seamlessly recover and continue playback from the exact position!
          */
         long now =
                 System.currentTimeMillis();
 
         if (!recovering) {
+            System.out.println(
+                    "[VibesInDev] Sound stopped unexpectedly before EOF (dimension switch / level unload). Starting recovery..."
+            );
             startRecovery();
             return;
         }
@@ -664,7 +666,13 @@ public final class MusicAudioPlayer {
         private final boolean resume;
         private final long initialSeekMs;
         private volatile long bytesPerSecond;
+        private volatile PositionTrackingAudioStream trackingStream;
         private int tickCount = 0;
+
+        public boolean isPlaybackCompleted() {
+            PositionTrackingAudioStream stream = trackingStream;
+            return stream != null && stream.isEof();
+        }
 
         private StreamingSoundInstance(
                 boolean resume
@@ -798,10 +806,14 @@ public final class MusicAudioPlayer {
                                                 + " bytes/sec"
                                 );
 
-                                return new PositionTrackingAudioStream(
-                                        decoder,
-                                        0
-                                );
+                                PositionTrackingAudioStream tracking =
+                                        new PositionTrackingAudioStream(
+                                                decoder,
+                                                input,
+                                                0
+                                        );
+                                this.trackingStream = tracking;
+                                return tracking;
                             }
 
                             long target = (initialSeekMs > 0 && bytesPerSecond > 0)
@@ -833,10 +845,14 @@ public final class MusicAudioPlayer {
                                             + formatPosition(target)
                             );
 
-                            return new PositionTrackingAudioStream(
-                                    decoder,
-                                    target
-                            );
+                            PositionTrackingAudioStream tracking =
+                                    new PositionTrackingAudioStream(
+                                            decoder,
+                                            input,
+                                            target
+                                    );
+                            this.trackingStream = tracking;
+                            return tracking;
 
                         } catch (IOException e) {
                             input.close();
@@ -943,16 +959,20 @@ public final class MusicAudioPlayer {
             implements AudioStream {
 
         private final AudioStream delegate;
+        private final MusicStreamBuffer.StreamInputStream input;
 
         private long position;
+        private volatile boolean eofReached;
 
         private PositionTrackingAudioStream(
                 AudioStream delegate,
+                MusicStreamBuffer.StreamInputStream input,
                 long initialPosition
         ) {
             this.delegate =
                     delegate;
-
+            this.input =
+                    input;
             this.position =
                     initialPosition;
         }
@@ -970,18 +990,24 @@ public final class MusicAudioPlayer {
             ByteBuffer buffer =
                     delegate.read(expectedSize);
 
-            if (buffer != null) {
-
-                int amount =
-                        buffer.remaining();
-
-                position += amount;
-
-                playedPcmBytes =
-                        position;
+            if (buffer == null || !buffer.hasRemaining()) {
+                eofReached = true;
+                return buffer;
             }
 
+            int amount =
+                    buffer.remaining();
+
+            position += amount;
+
+            playedPcmBytes =
+                    position;
+
             return buffer;
+        }
+
+        public boolean isEof() {
+            return eofReached && input != null && input.isEof();
         }
 
         @Override

@@ -565,6 +565,10 @@ public final class MusicAudioPlayer {
                     oldSound.bytesPerSecond;
         }
 
+        if (bytesPerSecond <= 0) {
+            bytesPerSecond = 192000L;
+        }
+
         long rewindBytes =
                 Math.max(
                         0,
@@ -693,8 +697,7 @@ public final class MusicAudioPlayer {
             this.resume = resume;
             this.initialSeekMs = initialSeekMs;
 
-            // Start volume at 0 if resuming/reconnecting so we can smoothly fade in
-            this.volume = resume ? 0.0F : MusicAudioPlayer.volume;
+            this.volume = Math.max(0.01F, MusicAudioPlayer.volume);
 
             this.pitch = 1.0F;
             this.looping = false;
@@ -710,11 +713,7 @@ public final class MusicAudioPlayer {
 
         @Override
         public float getVolume() {
-            if (resume && tickCount < 10) {
-                float fadeRatio = Math.min(1.0F, (float) tickCount / 10.0F);
-                return MusicAudioPlayer.volume * fadeRatio;
-            }
-            return MusicAudioPlayer.volume;
+            return Math.max(0.01F, MusicAudioPlayer.volume);
         }
 
         private void updateVolume() {
@@ -728,9 +727,6 @@ public final class MusicAudioPlayer {
 
         @Override
         public void tick() {
-            if (resume && tickCount < 10) {
-                tickCount++;
-            }
             this.volume = getVolume();
         }
 

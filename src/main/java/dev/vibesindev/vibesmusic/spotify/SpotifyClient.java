@@ -495,14 +495,32 @@ public final class SpotifyClient {
                         }
 
                         String json = response.body();
+                        com.google.gson.JsonObject root = com.google.gson.JsonParser.parseString(json).getAsJsonObject();
 
-                        String title = string(json, "name");
-                        String artist = firstArtistName(json);
-                        long durationMs = numberLong(
-                                json,
-                                "duration_ms",
-                                0
-                        );
+                        String title = root.has("name") && !root.get("name").isJsonNull()
+                                ? root.get("name").getAsString() : "Unknown Title";
+
+                        long durationMs = root.has("duration_ms") && !root.get("duration_ms").isJsonNull()
+                                ? root.get("duration_ms").getAsLong() : 0L;
+
+                        String artist = "Unknown Artist";
+                        if (root.has("artists") && root.get("artists").isJsonArray()) {
+                            com.google.gson.JsonArray artists = root.getAsJsonArray("artists");
+                            java.util.List<String> artistList = new java.util.ArrayList<>();
+                            for (com.google.gson.JsonElement el : artists) {
+                                if (el.isJsonObject()) {
+                                    com.google.gson.JsonObject a = el.getAsJsonObject();
+                                    if (a.has("name") && !a.get("name").isJsonNull()) {
+                                        artistList.add(a.get("name").getAsString());
+                                    }
+                                }
+                            }
+                            if (!artistList.isEmpty()) {
+                                artist = String.join(", ", artistList);
+                            }
+                        }
+
+                        plugin.getLogger().info("[VibesInDev] Resolved Spotify track: " + artist + " - " + title + " (" + (durationMs / 1000) + "s)");
 
                         return new SpotifyTrack(
                                 id,
@@ -820,27 +838,38 @@ public final class SpotifyClient {
             String input,
             String marker
     ) {
-        int index = input.indexOf(marker);
-
-        if (index < 0) {
+        if (input == null || marker == null) {
             return null;
         }
 
-        String rest = input.substring(
-                index + marker.length()
-        );
-
-        int end = rest.indexOf('?');
-
-        if (end < 0) {
-            end = rest.indexOf('&');
+        int index = input.indexOf(marker);
+        if (index < 0) {
+            // Also support Spotify URI syntax (e.g. spotify:track:...)
+            if (marker.startsWith("/") && marker.endsWith("/")) {
+                String altMarker = ":" + marker.substring(1);
+                index = input.indexOf(altMarker);
+                if (index >= 0) {
+                    marker = altMarker;
+                } else {
+                    return null;
+                }
+            } else {
+                return null;
+            }
         }
 
-        if (end < 0) {
-            end = rest.length();
+        String rest = input.substring(index + marker.length());
+        int end = rest.length();
+        for (int i = 0; i < rest.length(); i++) {
+            char c = rest.charAt(i);
+            if (c == '?' || c == '&' || c == '/' || c == '#' || Character.isWhitespace(c)) {
+                end = i;
+                break;
+            }
         }
 
-        return rest.substring(0, end);
+        String id = rest.substring(0, end);
+        return id.isBlank() ? null : id;
     }
 
     private static String string(

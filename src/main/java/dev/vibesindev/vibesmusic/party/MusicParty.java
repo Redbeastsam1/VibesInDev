@@ -30,6 +30,7 @@ public final class MusicParty {
     private Track currentTrack;
 
     private boolean paused;
+    private boolean autoPaused;
 
     private boolean shuffle;
 
@@ -247,6 +248,14 @@ public final class MusicParty {
 
         this.paused =
                 paused;
+    }
+
+    public boolean isAutoPaused() {
+        return autoPaused;
+    }
+
+    public void setAutoPaused(boolean autoPaused) {
+        this.autoPaused = autoPaused;
     }
 
 

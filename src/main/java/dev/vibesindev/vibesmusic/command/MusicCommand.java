@@ -198,6 +198,9 @@ public final class MusicCommand
             case "volume", "vol" ->
                     volume(player, args);
 
+            case "playlist", "playlists" ->
+                    playlistCommand(player, args);
+
             case "status", "diagnostics", "metrics" ->
                     status(player);
                     
@@ -349,6 +352,94 @@ public final class MusicCommand
     // ============================================================
     // PARTY COMMANDS
     // ============================================================
+
+    private void playlistCommand(Player player, String[] args) {
+        if (args.length < 2) {
+            plugin.playlistsMenu().open(player);
+            return;
+        }
+
+        String sub = args[1].toLowerCase(java.util.Locale.ROOT);
+        switch (sub) {
+            case "save" -> {
+                if (args.length < 3) {
+                    player.sendMessage(ChatColor.RED + "Usage: /music playlist save <name>");
+                    return;
+                }
+                String name = args[2];
+                java.util.List<Track> tracks = new java.util.ArrayList<>();
+                MusicParty party = plugin.parties().getPartyByPlayer(player.getUniqueId());
+                if (party != null) {
+                    if (party.getCurrentTrack() != null) {
+                        tracks.add(party.getCurrentTrack());
+                    }
+                    tracks.addAll(party.getQueue());
+                } else {
+                    Track current = plugin.queues().current(player.getUniqueId());
+                    if (current != null) {
+                        tracks.add(current);
+                    }
+                    tracks.addAll(plugin.queues().list(player.getUniqueId()));
+                }
+
+                if (tracks.isEmpty()) {
+                    player.sendMessage(ChatColor.RED + "Your queue is empty! Play or add songs first to save a playlist.");
+                    return;
+                }
+
+                plugin.playlists().savePlaylist(player.getUniqueId(), name, tracks);
+                player.sendMessage(ChatColor.GOLD + "[VibesInDev] " + ChatColor.GREEN + "Saved playlist '" 
+                        + ChatColor.AQUA + name + ChatColor.GREEN + "' with " + tracks.size() + " songs!");
+            }
+            case "play", "load" -> {
+                if (args.length < 3) {
+                    player.sendMessage(ChatColor.RED + "Usage: /music playlist play <name>");
+                    return;
+                }
+                String name = args[2];
+                var pl = plugin.playlists().getPlaylist(player.getUniqueId(), name);
+                if (pl == null) {
+                    player.sendMessage(ChatColor.RED + "No playlist found named '" + name + "'. Use /music playlist list.");
+                    return;
+                }
+                plugin.playback().playCustomPlaylist(player, pl.name(), pl.tracks());
+            }
+            case "list" -> {
+                var playlists = plugin.playlists().getPlaylists(player.getUniqueId());
+                if (playlists.isEmpty()) {
+                    player.sendMessage(ChatColor.YELLOW + "You have no saved playlists! Use /music playlist save <name>.");
+                    return;
+                }
+                player.sendMessage(ChatColor.GOLD + "=== Your Playlists (" + playlists.size() + ") ===");
+                for (var pl : playlists.values()) {
+                    player.sendMessage(ChatColor.YELLOW + "• " + ChatColor.AQUA + pl.name() 
+                            + ChatColor.GRAY + " (" + pl.tracks().size() + " tracks, " + plugin.playlists().formatTotalDuration(pl.tracks()) + ")"
+                            + ChatColor.DARK_GRAY + " - " + ChatColor.GREEN + "/music playlist play " + pl.name());
+                }
+            }
+            case "delete", "remove" -> {
+                if (args.length < 3) {
+                    player.sendMessage(ChatColor.RED + "Usage: /music playlist delete <name>");
+                    return;
+                }
+                String name = args[2];
+                boolean deleted = plugin.playlists().deletePlaylist(player.getUniqueId(), name);
+                if (deleted) {
+                    player.sendMessage(ChatColor.GOLD + "[VibesInDev] " + ChatColor.GREEN + "Deleted playlist '" + name + "'.");
+                } else {
+                    player.sendMessage(ChatColor.RED + "No playlist found named '" + name + "'.");
+                }
+            }
+            default -> {
+                player.sendMessage(ChatColor.GOLD + "=== Playlist Help ===");
+                player.sendMessage(ChatColor.YELLOW + "/music playlist" + ChatColor.GRAY + " - Open playlists GUI");
+                player.sendMessage(ChatColor.YELLOW + "/music playlist save <name>" + ChatColor.GRAY + " - Save current songs as playlist");
+                player.sendMessage(ChatColor.YELLOW + "/music playlist play <name>" + ChatColor.GRAY + " - Play saved playlist");
+                player.sendMessage(ChatColor.YELLOW + "/music playlist list" + ChatColor.GRAY + " - List your playlists");
+                player.sendMessage(ChatColor.YELLOW + "/music playlist delete <name>" + ChatColor.GRAY + " - Delete a playlist");
+            }
+        }
+    }
 
     private void partyCommand(
             Player player,
@@ -1942,6 +2033,13 @@ public final class MusicCommand
 
         sender.sendMessage(
                 ChatColor.GRAY
+                        + "/music playlist [save|play|list|delete]"
+                        + ChatColor.WHITE
+                        + " - Manage custom playlists and open GUI"
+        );
+
+        sender.sendMessage(
+                ChatColor.GRAY
                         + "/music play <song name or URL>"
         );
 
@@ -2035,10 +2133,31 @@ public final class MusicCommand
                             "metrics",
                             "debug",
                             "history",
-                            "volume"
+                            "volume",
+                            "playlist"
                     ),
                     args[0]
             );
+        }
+
+        if ((args[0].equalsIgnoreCase("playlist") || args[0].equalsIgnoreCase("playlists"))
+                && args.length == 2) {
+            return fuzzyComplete(
+                    List.of("save", "play", "load", "list", "delete"),
+                    args[1]
+            );
+        }
+
+        if ((args[0].equalsIgnoreCase("playlist") || args[0].equalsIgnoreCase("playlists"))
+                && args.length == 3) {
+            if (args[1].equalsIgnoreCase("play") || args[1].equalsIgnoreCase("load") || args[1].equalsIgnoreCase("delete")) {
+                if (sender instanceof Player p) {
+                    return fuzzyComplete(
+                            plugin.playlists().getPlaylistNames(p.getUniqueId()),
+                            args[2]
+                    );
+                }
+            }
         }
 
         if ((args[0].equalsIgnoreCase("volume") || args[0].equalsIgnoreCase("vol"))

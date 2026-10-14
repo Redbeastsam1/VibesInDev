@@ -94,6 +94,33 @@ public final class MusicPlaybackManager {
                 }
             }, intervalTicks, intervalTicks);
         }
+
+        // Gapless playback: check every 5s if upcoming tracks need background caching
+        plugin.getServer().getScheduler().runTaskTimer(plugin, () -> {
+            if (!plugin.getConfig().getBoolean("playback.preload-next", true)) return;
+
+            for (MusicParty party : plugin.parties().getAllParties()) {
+                if (party.getCurrentTrack() != null && !party.isPaused()) {
+                    Track next = party.peekNext();
+                    if (next != null && !plugin.cache().hasAudio(next.id()) && !activePreparations.containsKey(next.id())) {
+                        prepareTrack(next);
+                    }
+                }
+            }
+
+            for (Player player : plugin.getServer().getOnlinePlayers()) {
+                UUID uuid = player.getUniqueId();
+                if (plugin.network().isPlaying(player) && !plugin.network().isPaused(player)) {
+                    Track current = plugin.queues().current(uuid);
+                    if (current != null) {
+                        Track next = plugin.queues().peekNext(uuid, current, true);
+                        if (next != null && !plugin.cache().hasAudio(next.id()) && !activePreparations.containsKey(next.id())) {
+                            prepareTrack(next);
+                        }
+                    }
+                }
+            }
+        }, 100L, 100L);
     }
 
     public void playInput(
@@ -144,8 +171,8 @@ public final class MusicPlaybackManager {
         String trimmed = input.trim();
         String lower = trimmed.toLowerCase();
         
-        if (lower.contains("spotify.com")) {
-            if (lower.contains("/playlist") || lower.contains("/album")) {
+        if (lower.contains("spotify.com") || lower.startsWith("spotify:")) {
+            if (lower.contains("/playlist") || lower.contains("/album") || lower.contains(":playlist:") || lower.contains(":album:")) {
                 if (!player.hasPermission("vibesindev.spotify.playlist")) {
                     player.sendMessage(ChatColor.RED + "You do not have permission to play Spotify playlists.");
                     return;
@@ -234,6 +261,7 @@ public final class MusicPlaybackManager {
                                                             + ChatColor.AQUA
                                                             + track.artist()
                                             );
+                                            sendActionBarNotification(player, track);
 
                                             play(
                                                     player,
@@ -320,6 +348,12 @@ public final class MusicPlaybackManager {
         if (plugin.network().isPlaying(player)) {
 
             plugin.queues().enqueue(uuid, track);
+            if (plugin.getConfig().getBoolean("playback.preload-next", true)) {
+                Track next = plugin.queues().peekNext(uuid, plugin.queues().current(uuid), true);
+                if (next != null) {
+                    prepareTrack(next);
+                }
+            }
 
             player.sendMessage(
                     ChatColor.GREEN
@@ -448,6 +482,8 @@ public final class MusicPlaybackManager {
         PlaybackSession session = sessions.get(player.getUniqueId());
         if (session != null) {
             session.setState(PlaybackState.PAUSED);
+            String title = (session.getTrack() != null) ? session.getTrack().title() : "Music";
+            sendActionBarStatus(player, ChatColor.YELLOW + "⏸ Paused: " + ChatColor.WHITE + title);
         }
     }
 
@@ -459,6 +495,8 @@ public final class MusicPlaybackManager {
         PlaybackSession session = sessions.get(player.getUniqueId());
         if (session != null) {
             session.setState(PlaybackState.PLAYING);
+            String title = (session.getTrack() != null) ? session.getTrack().title() : "Music";
+            sendActionBarStatus(player, ChatColor.GREEN + "▶ Resumed: " + ChatColor.WHITE + title);
         }
     }
     
@@ -622,8 +660,8 @@ public final class MusicPlaybackManager {
         String trimmed = input.trim();
         String lower = trimmed.toLowerCase();
         
-        if (lower.contains("spotify.com")) {
-            if (lower.contains("/playlist") || lower.contains("/album")) {
+        if (lower.contains("spotify.com") || lower.startsWith("spotify:")) {
+            if (lower.contains("/playlist") || lower.contains("/album") || lower.contains(":playlist:") || lower.contains(":album:")) {
                 if (!player.hasPermission("vibesindev.spotify.playlist")) {
                     player.sendMessage(ChatColor.RED + "You do not have permission to play Spotify playlists.");
                     return;
@@ -804,6 +842,12 @@ public final class MusicPlaybackManager {
 
         if (party.getCurrentTrack() != null) {
             party.enqueue(track);
+            if (plugin.getConfig().getBoolean("playback.preload-next", true)) {
+                Track next = party.peekNext();
+                if (next != null) {
+                    prepareTrack(next);
+                }
+            }
 
             player.sendMessage(
                     ChatColor.GREEN
@@ -879,6 +923,13 @@ public final class MusicPlaybackManager {
                 ChatColor.YELLOW
                         + "Ⅱ Party music paused."
         );
+        String pTitle = (party.getCurrentTrack() != null) ? party.getCurrentTrack().title() : "Party Music";
+        for (UUID m : party.getMembers()) {
+            Player pTarget = plugin.getServer().getPlayer(m);
+            if (pTarget != null && pTarget.isOnline()) {
+                sendActionBarStatus(pTarget, ChatColor.YELLOW + "⏸ Party Paused: " + ChatColor.WHITE + pTitle);
+            }
+        }
     }
 
     public void partyResume(Player player) {
@@ -941,6 +992,13 @@ public final class MusicPlaybackManager {
                 ChatColor.GREEN
                         + "▶ Party music resumed."
         );
+        String prTitle = (party.getCurrentTrack() != null) ? party.getCurrentTrack().title() : "Party Music";
+        for (UUID m : party.getMembers()) {
+            Player pTarget = plugin.getServer().getPlayer(m);
+            if (pTarget != null && pTarget.isOnline()) {
+                sendActionBarStatus(pTarget, ChatColor.GREEN + "▶ Party Resumed: " + ChatColor.WHITE + prTitle);
+            }
+        }
     }
 
     public void partySeek(Player player, long positionMs) {
@@ -1092,6 +1150,7 @@ public final class MusicPlaybackManager {
                     Set<UUID> started = partyCompletions.get(party.getPartyId());
                     if (started != null) {
                         started.add(player.getUniqueId());
+                    sendActionBarNotification(player, party.getCurrentTrack());
                     }
                     
                     plugin.metrics().incrementTracksPlayed();
@@ -1228,6 +1287,7 @@ public final class MusicPlaybackManager {
 
                                                 if (target != null && target.isOnline()) {
                                                     target.sendMessage(message);
+                                                    sendActionBarNotification(target, track);
                                                 }
                                             }
                                         }
@@ -1725,13 +1785,13 @@ public final class MusicPlaybackManager {
     }
 
     private boolean isUrl(String input) {
-
-        String lower =
-                input.toLowerCase();
+        if (input == null) return false;
+        String lower = input.toLowerCase();
 
         return lower.startsWith("http://")
                 || lower.startsWith("https://")
-                || lower.startsWith("www.");
+                || lower.startsWith("www.")
+                || lower.startsWith("spotify:");
     }
 
     private void sendResolveError(
@@ -1778,7 +1838,54 @@ public final class MusicPlaybackManager {
      * The sender already received their own message before calling this,
      * so pass the sender's UUID to skip them.
      */
-    public void broadcastToParty(MusicParty party, String message, UUID exceptUuid) {
+    public void sendActionBarNotification(Player player, Track track) {
+        if (player == null || !player.isOnline() || track == null) return;
+        try {
+            String bar = ChatColor.GOLD + "🎵 " + ChatColor.YELLOW + "Now Playing: "
+                    + ChatColor.WHITE + track.title()
+                    + ChatColor.GRAY + " • "
+                    + ChatColor.AQUA + track.artist()
+                    + ChatColor.DARK_GRAY + " [" + ChatColor.GRAY + track.durationText() + ChatColor.DARK_GRAY + "]";
+            player.spigot().sendMessage(
+                    net.md_5.bungee.api.ChatMessageType.ACTION_BAR,
+                    net.md_5.bungee.api.chat.TextComponent.fromLegacyText(bar)
+            );
+        } catch (Throwable ignored) {
+        }
+    }
+
+    public void sendActionBarStatus(Player player, String message) {
+        if (player == null || !player.isOnline() || message == null) return;
+        try {
+            player.spigot().sendMessage(
+                    net.md_5.bungee.api.ChatMessageType.ACTION_BAR,
+                    net.md_5.bungee.api.chat.TextComponent.fromLegacyText(message)
+            );
+        } catch (Throwable ignored) {
+        }
+    }
+
+    public void playCustomPlaylist(Player player, String playlistName, List<Track> tracks) {
+        if (tracks == null || tracks.isEmpty()) {
+            player.sendMessage(ChatColor.RED + "Playlist is empty.");
+            return;
+        }
+
+        MusicParty party = plugin.parties().getPartyByPlayer(player.getUniqueId());
+        if (party != null) {
+            if (!party.isOwner(player.getUniqueId())) {
+                player.sendMessage(ChatColor.RED + "Only the party owner can start playlists for the party.");
+                return;
+            }
+            playResolvedPartyTracks(player, tracks);
+            broadcastToPartyAll(party, ChatColor.GOLD + "[Party] " + ChatColor.GREEN + "Started playlist: " + ChatColor.AQUA + playlistName + ChatColor.GRAY + " (" + tracks.size() + " tracks)");
+        } else {
+            playResolvedTracks(player, tracks);
+            player.sendMessage(ChatColor.GOLD + "[VibesInDev] " + ChatColor.GREEN + "Started playlist: " + ChatColor.AQUA + playlistName + ChatColor.GRAY + " (" + tracks.size() + " tracks)");
+        }
+    }
+
+        public void broadcastToParty(MusicParty party, String message, UUID exceptUuid) {
         for (UUID member : party.getMembers()) {
             if (member.equals(exceptUuid)) continue;
             Player p = plugin.getServer().getPlayer(member);

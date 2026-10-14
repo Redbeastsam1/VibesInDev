@@ -1,13 +1,15 @@
 package dev.vibesindev.vibesmusic.gui;
 
 import dev.vibesindev.vibesmusic.VibesInDevPlugin;
-import dev.vibesindev.vibesmusic.queue.RepeatMode;
+import dev.vibesindev.vibesmusic.model.Track;
+import dev.vibesindev.vibesmusic.playlist.MusicPlaylistManager.CustomPlaylist;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
+import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.inventory.Inventory;
@@ -16,126 +18,128 @@ import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
 
-import java.util.List;
+import java.util.*;
 
-/**
- * Playlists menu — opens from the main music GUI (slot 26).
- *
- * Because the plugin does not have a persistent playlist store,
- * this menu acts as a quick-action launcher for common queue operations
- * and gives the player prompts to run the underlying commands.
- *
- * Layout (3×9 chest = 27 slots):
- *
- *   Slot  4 — Header
- *   Slot 10 — Play a song / URL now       (MUSIC_DISC_13)
- *   Slot 12 — Add to queue                (CHEST)
- *   Slot 14 — Clear queue                 (LAVA_BUCKET)
- *   Slot 16 — Stop all music              (BARRIER)
- *   Slot 22 — Repeat mode cycle           (REPEATER)
- *   Slot 20 — Shuffle toggle              (COMPARATOR)
- *   Slot 24 — Volume info                 (NOTE_BLOCK)
- *   Slot 26 — Back                        (ARROW)
- */
 public final class PlaylistsMenu implements Listener {
 
-    private static final String TITLE = ChatColor.LIGHT_PURPLE + "Quick Actions";
+    private static final String TITLE = ChatColor.DARK_PURPLE + "" + ChatColor.BOLD + "Custom Playlists";
+    private static final Material[] DISC_MATERIALS = {
+            Material.MUSIC_DISC_CAT,
+            Material.MUSIC_DISC_13,
+            Material.MUSIC_DISC_BLOCKS,
+            Material.MUSIC_DISC_CHIRP,
+            Material.MUSIC_DISC_FAR,
+            Material.MUSIC_DISC_MALL,
+            Material.MUSIC_DISC_MELLOHI,
+            Material.MUSIC_DISC_STAL,
+            Material.MUSIC_DISC_STRAD,
+            Material.MUSIC_DISC_WARD,
+            Material.MUSIC_DISC_11,
+            Material.MUSIC_DISC_WAIT,
+            Material.MUSIC_DISC_OTHERSIDE,
+            Material.MUSIC_DISC_5,
+            Material.MUSIC_DISC_PIGSTEP,
+            Material.MUSIC_DISC_RELIC
+    };
 
     private final VibesInDevPlugin plugin;
+    private final Map<UUID, Map<Integer, String>> slotPlaylistMap = new HashMap<>();
 
     public PlaylistsMenu(VibesInDevPlugin plugin) {
         this.plugin = plugin;
     }
 
-    // =========================================================
-    // OPEN
-    // =========================================================
-
     public void open(Player player) {
-        Inventory inv = Bukkit.createInventory(new PlaylistsHolder(), 27, TITLE);
-        fill(inv);
+        PlaylistsHolder holder = new PlaylistsHolder();
+        Inventory inv = Bukkit.createInventory(holder, 54, TITLE);
+        holder.inventory = inv;
         populate(inv, player);
         player.openInventory(inv);
     }
 
     private void populate(Inventory inv, Player player) {
-        RepeatMode repeat = plugin.queues().getRepeatMode(player.getUniqueId());
-        boolean shuffle   = plugin.queues().isShuffle(player.getUniqueId());
-        float vol = plugin.network().getVolume(player);
+        inv.clear();
+        fillBorder(inv);
 
-        // Header
-        inv.setItem(4, item(Material.BOOK,
-                ChatColor.LIGHT_PURPLE + "Quick Actions",
-                List.of(
-                        ChatColor.GRAY + "Use these shortcuts to control",
-                        ChatColor.GRAY + "playback and the queue."
-                )));
+        Map<String, CustomPlaylist> userPlaylists = plugin.playlists().getPlaylists(player.getUniqueId());
+        Map<Integer, String> slotMap = new HashMap<>();
 
-        // Play now
-        inv.setItem(10, item(Material.MUSIC_DISC_13,
-                ChatColor.GREEN + "▶ Play Song",
+        if (userPlaylists.isEmpty()) {
+            inv.setItem(22, item(Material.NOTE_BLOCK,
+                    ChatColor.YELLOW + "" + ChatColor.BOLD + "No Saved Playlists",
+                    List.of(
+                            ChatColor.GRAY + "You haven't saved any custom playlists yet!",
+                            "",
+                            ChatColor.WHITE + "1. Play or queue some songs",
+                            ChatColor.WHITE + "2. Type: " + ChatColor.YELLOW + "/music playlist save <name>",
+                            "",
+                            ChatColor.GRAY + "They will appear here as clickable music discs!"
+                    )));
+        } else {
+            List<CustomPlaylist> sorted = new ArrayList<>(userPlaylists.values());
+            sorted.sort(Comparator.comparing(CustomPlaylist::name, String.CASE_INSENSITIVE_ORDER));
+
+            int[] contentSlots = {
+                    10, 11, 12, 13, 14, 15, 16,
+                    19, 20, 21, 22, 23, 24, 25,
+                    28, 29, 30, 31, 32, 33, 34,
+                    37, 38, 39, 40, 41, 42, 43
+            };
+
+            int idx = 0;
+            for (CustomPlaylist pl : sorted) {
+                if (idx >= contentSlots.length) break;
+                int slot = contentSlots[idx];
+                slotMap.put(slot, pl.name());
+
+                Material mat = DISC_MATERIALS[idx % DISC_MATERIALS.length];
+                List<String> lore = new ArrayList<>();
+                lore.add(ChatColor.GRAY + "Tracks: " + ChatColor.WHITE + pl.tracks().size());
+                lore.add(ChatColor.GRAY + "Total Time: " + ChatColor.WHITE + plugin.playlists().formatTotalDuration(pl.tracks()));
+                lore.add("");
+                lore.add(ChatColor.YELLOW + "Preview:");
+                int previewLimit = Math.min(3, pl.tracks().size());
+                for (int i = 0; i < previewLimit; i++) {
+                    Track t = pl.tracks().get(i);
+                    String title = t.title().length() > 25 ? t.title().substring(0, 22) + "..." : t.title();
+                    lore.add(ChatColor.DARK_GRAY + " " + (i + 1) + ". " + ChatColor.WHITE + title);
+                }
+                if (pl.tracks().size() > 3) {
+                    lore.add(ChatColor.DARK_GRAY + " ... and " + (pl.tracks().size() - 3) + " more");
+                }
+                lore.add("");
+                lore.add(ChatColor.GREEN + "▶ Left-Click to Play");
+                lore.add(ChatColor.RED + "✖ Right-Click to Delete");
+
+                inv.setItem(slot, item(mat, ChatColor.GOLD + "" + ChatColor.BOLD + pl.name(), lore));
+                idx++;
+            }
+        }
+
+        slotPlaylistMap.put(player.getUniqueId(), slotMap);
+
+        // Control buttons on bottom row
+        inv.setItem(48, item(Material.WRITABLE_BOOK,
+                ChatColor.YELLOW + "" + ChatColor.BOLD + "Save Current Queue",
                 List.of(
-                        ChatColor.GRAY + "Close this menu and type:",
-                        ChatColor.WHITE + "/music play <song name or URL>",
+                        ChatColor.GRAY + "Save your active songs into a new playlist.",
                         "",
-                        ChatColor.GRAY + "Supports YouTube, Spotify & SoundCloud."
+                        ChatColor.WHITE + "Type: " + ChatColor.YELLOW + "/music playlist save <name>"
                 )));
 
-        // Add to queue
-        inv.setItem(12, item(Material.CHEST,
-                ChatColor.GOLD + "+ Add to Queue",
-                List.of(
-                        ChatColor.GRAY + "Close this menu and type:",
-                        ChatColor.WHITE + "/music queue add <song name or URL>"
-                )));
-
-        // Clear queue
-        inv.setItem(14, item(Material.LAVA_BUCKET,
-                ChatColor.RED + "✖ Clear Queue",
-                List.of(ChatColor.GRAY + "Remove all upcoming tracks.",
-                        ChatColor.RED + "Click to clear now.")));
-
-        // Stop music
-        inv.setItem(16, item(Material.BARRIER,
-                ChatColor.RED + "■ Stop Music",
-                List.of(ChatColor.GRAY + "Immediately stop all playback.")));
-
-        // Shuffle
-        inv.setItem(20, item(shuffle ? Material.COMPARATOR : Material.CLOCK,
-                (shuffle ? ChatColor.GREEN : ChatColor.GRAY) + "Shuffle: " + (shuffle ? "ON" : "OFF"),
-                List.of(ChatColor.GRAY + "Click to toggle queue shuffle")));
-
-        // Repeat
-        ChatColor repeatColor = switch (repeat) {
-            case OFF   -> ChatColor.GRAY;
-            case TRACK -> ChatColor.YELLOW;
-            case QUEUE -> ChatColor.GREEN;
-        };
-        inv.setItem(22, item(Material.REPEATER,
-                repeatColor + "Repeat: " + repeat.name(),
-                List.of(ChatColor.GRAY + "Click to cycle: OFF → TRACK → QUEUE")));
-
-        // Volume display
-        int pct = Math.round(vol * 100f);
-        Material volMat = (pct >= 75) ? Material.JUKEBOX
-                : (pct >= 40) ? Material.NOTE_BLOCK
-                : Material.DEAD_BUSH;
-        inv.setItem(24, item(volMat,
-                ChatColor.YELLOW + "Volume: " + pct + "%",
-                List.of(
-                        ChatColor.GRAY + "Use Volume +/- in the main menu,",
-                        ChatColor.GRAY + "or: " + ChatColor.WHITE + "/music volume <0-100>"
-                )));
-
-        // Back
-        inv.setItem(26, item(Material.ARROW,
-                ChatColor.RED + "← Back",
+        inv.setItem(49, item(Material.ARROW,
+                ChatColor.RED + "◀ Back to Music Menu",
                 List.of(ChatColor.GRAY + "Return to main menu")));
-    }
 
-    // =========================================================
-    // CLICK
-    // =========================================================
+        inv.setItem(50, item(Material.BOOK,
+                ChatColor.AQUA + "" + ChatColor.BOLD + "Playlist Commands",
+                List.of(
+                        ChatColor.WHITE + "/music playlist save <name>",
+                        ChatColor.WHITE + "/music playlist play <name>",
+                        ChatColor.WHITE + "/music playlist list",
+                        ChatColor.WHITE + "/music playlist delete <name>"
+                )));
+    }
 
     @EventHandler
     public void onClick(InventoryClickEvent event) {
@@ -145,55 +149,37 @@ public final class PlaylistsMenu implements Listener {
         if (!(top.getHolder() instanceof PlaylistsHolder)) return;
 
         event.setCancelled(true);
-        if (event.getRawSlot() >= top.getSize()) return;
+        int slot = event.getRawSlot();
+        if (slot >= top.getSize() || slot < 0) return;
 
-        switch (event.getRawSlot()) {
-            case 10 -> {
+        if (slot == 48) {
+            player.closeInventory();
+            player.sendMessage(ChatColor.GOLD + "[VibesInDev] " + ChatColor.YELLOW + "To save your current songs, type: "
+                    + ChatColor.WHITE + "/music playlist save <name>");
+            return;
+        }
+
+        if (slot == 49) {
+            plugin.musicMenu().open(player);
+            return;
+        }
+
+        Map<Integer, String> slotMap = slotPlaylistMap.get(player.getUniqueId());
+        if (slotMap != null && slotMap.containsKey(slot)) {
+            String playlistName = slotMap.get(slot);
+            CustomPlaylist pl = plugin.playlists().getPlaylist(player.getUniqueId(), playlistName);
+            if (pl == null) return;
+
+            if (event.getClick() == ClickType.RIGHT || event.getClick() == ClickType.SHIFT_RIGHT) {
+                // Delete playlist
+                plugin.playlists().deletePlaylist(player.getUniqueId(), playlistName);
+                player.sendMessage(ChatColor.RED + "Deleted playlist: " + ChatColor.GOLD + playlistName);
+                Bukkit.getScheduler().runTask(plugin, () -> populate(top, player));
+            } else {
+                // Play playlist
                 player.closeInventory();
-                player.sendMessage(ChatColor.GRAY + "Type: " + ChatColor.WHITE + "/music play <song or URL>");
+                plugin.playback().playCustomPlaylist(player, pl.name(), pl.tracks());
             }
-            case 12 -> {
-                player.closeInventory();
-                player.sendMessage(ChatColor.GRAY + "Type: " + ChatColor.WHITE + "/music queue add <song or URL>");
-            }
-            case 14 -> {
-                plugin.queues().clearQueue(player.getUniqueId());
-                player.sendMessage(ChatColor.RED + "Queue cleared.");
-                Bukkit.getScheduler().runTask(plugin, () -> {
-                    fill(top);
-                    populate(top, player);
-                });
-            }
-            case 16 -> {
-                plugin.playback().stop(player);
-                player.sendMessage(ChatColor.RED + "■ Music stopped.");
-                player.closeInventory();
-            }
-            case 20 -> {
-                boolean was = plugin.queues().isShuffle(player.getUniqueId());
-                plugin.queues().setShuffle(player.getUniqueId(), !was);
-                player.sendMessage(ChatColor.GREEN + "Shuffle: " + (!was ? "ON" : "OFF"));
-                Bukkit.getScheduler().runTask(plugin, () -> {
-                    fill(top);
-                    populate(top, player);
-                });
-            }
-            case 22 -> {
-                RepeatMode cur  = plugin.queues().getRepeatMode(player.getUniqueId());
-                RepeatMode next = switch (cur) {
-                    case OFF   -> RepeatMode.TRACK;
-                    case TRACK -> RepeatMode.QUEUE;
-                    case QUEUE -> RepeatMode.OFF;
-                };
-                plugin.queues().setRepeatMode(player.getUniqueId(), next);
-                player.sendMessage(ChatColor.GREEN + "Repeat mode: " + next.name());
-                Bukkit.getScheduler().runTask(plugin, () -> {
-                    fill(top);
-                    populate(top, player);
-                });
-            }
-            case 26 -> plugin.musicMenu().open(player);
-            default -> { /* filler */ }
         }
     }
 
@@ -204,18 +190,19 @@ public final class PlaylistsMenu implements Listener {
         }
     }
 
-    // =========================================================
-    // HELPERS
-    // =========================================================
-
-    private void fill(Inventory inv) {
-        ItemStack filler = item(Material.GRAY_STAINED_GLASS_PANE, " ", List.of());
-        for (int i = 0; i < inv.getSize(); i++) inv.setItem(i, filler);
+    private void fillBorder(Inventory inv) {
+        ItemStack border = item(Material.GRAY_STAINED_GLASS_PANE, " ", List.of());
+        for (int i = 0; i < 9; i++) inv.setItem(i, border);
+        for (int i = 45; i < 54; i++) inv.setItem(i, border);
+        for (int i = 9; i < 45; i += 9) {
+            inv.setItem(i, border);
+            inv.setItem(i + 8, border);
+        }
     }
 
     private ItemStack item(Material mat, String name, List<String> lore) {
         ItemStack stack = new ItemStack(mat);
-        ItemMeta meta   = stack.getItemMeta();
+        ItemMeta meta = stack.getItemMeta();
         if (meta != null) {
             meta.setDisplayName(name);
             meta.setLore(lore);
@@ -225,11 +212,8 @@ public final class PlaylistsMenu implements Listener {
         return stack;
     }
 
-    // =========================================================
-    // HOLDER
-    // =========================================================
-
     private static final class PlaylistsHolder implements InventoryHolder {
-        @Override public Inventory getInventory() { return null; }
+        private Inventory inventory;
+        @Override public Inventory getInventory() { return inventory; }
     }
 }

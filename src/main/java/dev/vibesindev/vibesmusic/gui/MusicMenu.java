@@ -43,6 +43,7 @@ public final class MusicMenu implements Listener {
     private static final int SLOT_NOWLINK   = 23;
     private static final int SLOT_PARTY     = 24;
     private static final int SLOT_VOL_UP    = 25;
+    private static final int SLOT_PLAYLISTS = 18;
 
     private static final String TITLE = ChatColor.DARK_AQUA + "" + ChatColor.BOLD + " VibesInDev";
 
@@ -148,6 +149,12 @@ public final class MusicMenu implements Listener {
                 ChatColor.RED + "" + ChatColor.BOLD + "Stop",
                 List.of(ChatColor.GRAY + "Stop music playback entirely")));
 
+        // Playlists
+        inv.setItem(SLOT_PLAYLISTS, item(Material.JUKEBOX,
+                ChatColor.LIGHT_PURPLE + "" + ChatColor.BOLD + "Playlists",
+                List.of(ChatColor.GRAY + "View and play your saved playlists",
+                        ChatColor.YELLOW + "Click to open playlists menu")));
+
         // Now Playing (detailed - links to NowPlayingMenu)
         inv.setItem(SLOT_NOWLINK, item(Material.MUSIC_DISC_CAT,
                 ChatColor.AQUA + "Now Playing",
@@ -180,6 +187,7 @@ public final class MusicMenu implements Listener {
 
         int slot = event.getRawSlot();
         switch (slot) {
+            case SLOT_PLAYLISTS -> plugin.playlistsMenu().open(player);
             case SLOT_PREV -> {
                 plugin.playback().previous(player);
                 refreshLater(top, player);

@@ -139,6 +139,10 @@ public final class MusicPartyManager {
         return parties.get(partyId);
     }
 
+    public java.util.Collection<MusicParty> getAllParties() {
+        return java.util.Collections.unmodifiableCollection(parties.values());
+    }
+
 
     public boolean hasParty(
             UUID player
@@ -788,6 +792,29 @@ public final class MusicPartyManager {
         }
         
         lastKnownParties.put(player, party.getPartyId());
+
+        boolean hasAnyOnline = false;
+        for (UUID member : party.getMembers()) {
+            if (member.equals(player)) continue;
+            org.bukkit.entity.Player online = plugin.getServer().getPlayer(member);
+            if (online != null && online.isOnline()) {
+                hasAnyOnline = true;
+                break;
+            }
+        }
+
+        if (!hasAnyOnline) {
+            // All members of the party are offline! Auto-pause party playback
+            if (party.getCurrentTrack() != null && !party.isPaused()) {
+                party.setAutoPaused(true);
+                party.setPaused(true);
+                dev.vibesindev.vibesmusic.playback.PlaybackSession session = plugin.playback().getSession(party.getPartyId());
+                if (session != null && session.getState() == dev.vibesindev.vibesmusic.playback.PlaybackState.PLAYING) {
+                    session.setState(dev.vibesindev.vibesmusic.playback.PlaybackState.PAUSED);
+                }
+                plugin.getLogger().info("[VibesInDev] Auto-paused party " + party.getPartyId() + " because all members are offline.");
+            }
+        }
 
         int graceSeconds = plugin.getConfig().getInt("party.disconnect-grace-seconds", 180);
         long ticks = graceSeconds * 20L;

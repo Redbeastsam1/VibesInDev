@@ -1,5 +1,7 @@
 package dev.vibesindev.vibesmusic;
 
+import dev.vibesindev.vibesmusic.playlist.MusicPlaylistManager;
+
 import dev.vibesindev.vibesmusic.audio.FFmpegManager;
 import dev.vibesindev.vibesmusic.audio.YtDlpManager;
 import dev.vibesindev.vibesmusic.cache.TrackCache;
@@ -39,6 +41,7 @@ public final class VibesInDevPlugin
     private NowPlayingMenu nowPlayingMenu;
     private QueueMenu queueMenu;
     private PlaylistsMenu playlistsMenu;
+    private MusicPlaylistManager playlists;
     private MetricsManager metrics;
     private HistoryMenu historyMenu;
 
@@ -63,6 +66,7 @@ public final class VibesInDevPlugin
                 new MusicQueueManager(this);
 
         parties = new MusicPartyManager(this);
+        playlists = new MusicPlaylistManager(this);
 
         partyInfoMenu = new PartyInfoMenu(this);
         musicMenu = new MusicMenu(this);
@@ -243,6 +247,10 @@ public final class VibesInDevPlugin
 
     public HistoryMenu historyMenu() {
         return historyMenu;
+    }
+
+    public MusicPlaylistManager playlists() {
+        return playlists;
     }
 
 }

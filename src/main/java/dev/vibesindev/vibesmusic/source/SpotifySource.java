@@ -2,7 +2,6 @@ package dev.vibesindev.vibesmusic.source;
 
 import dev.vibesindev.vibesmusic.model.Track;
 import dev.vibesindev.vibesmusic.spotify.SpotifyClient;
-import dev.vibesindev.vibesmusic.spotify.SpotifyTrack;
 
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -17,20 +16,23 @@ public final class SpotifySource implements MusicSource {
 
     @Override
     public boolean supports(String input) {
-        return input.toLowerCase().contains("open.spotify.com/");
+        if (input == null) return false;
+        String lower = input.toLowerCase();
+        return lower.contains("open.spotify.com/") || lower.startsWith("spotify:");
     }
 
     @Override
     public CompletableFuture<List<Track>> resolve(String input) {
-        if (input.toLowerCase().contains("/track/")) {
+        String lower = input.toLowerCase();
+        if (lower.contains("/track/") || lower.contains(":track:")) {
             return spotify.resolveTrack(input).thenApply(List::of);
         }
 
-        if (input.toLowerCase().contains("/playlist/")) {
+        if (lower.contains("/playlist/") || lower.contains(":playlist:")) {
             return spotify.resolvePlaylist(input);
         }
 
-        if (input.toLowerCase().contains("/album/")) {
+        if (lower.contains("/album/") || lower.contains(":album:")) {
             return spotify.resolveAlbum(input);
         }
 

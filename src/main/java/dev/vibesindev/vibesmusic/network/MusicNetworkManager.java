@@ -915,6 +915,17 @@ public final class MusicNetworkManager
                     (session.getState() == dev.vibesindev.vibesmusic.playback.PlaybackState.PLAYING
                             || session.getState() == dev.vibesindev.vibesmusic.playback.PlaybackState.PAUSED)) {
 
+                if (party.isAutoPaused()) {
+                    party.setAutoPaused(false);
+                    party.setPaused(false);
+                    session.setState(dev.vibesindev.vibesmusic.playback.PlaybackState.PLAYING);
+                    plugin.getLogger().info("[VibesInDev] Auto-resumed party " + party.getPartyId() + " because member " + player.getName() + " rejoined.");
+                    player.sendMessage(
+                            org.bukkit.ChatColor.GOLD + "[VibesInDev] "
+                                    + org.bukkit.ChatColor.GREEN + "Party music automatically resumed from where you left off!"
+                    );
+                }
+
                 long positionMs = session.getPositionMs();
                 byte status = (session.getState() == dev.vibesindev.vibesmusic.playback.PlaybackState.PAUSED) ? (byte) 2 : (byte) 1;
 

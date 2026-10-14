@@ -54,6 +54,9 @@ public final class MusicNetworkManager
     private final ConcurrentHashMap<UUID, Float> volumes =
             new ConcurrentHashMap<>();
 
+    private final java.io.File settingsFile;
+    private final org.bukkit.configuration.file.YamlConfiguration settingsConfig;
+
     private final MusicStreamer streamer;
 
     private MusicPlaybackManager playback;
@@ -64,6 +67,45 @@ public final class MusicNetworkManager
 
         this.plugin = plugin;
         this.streamer = new MusicStreamer(this);
+        this.settingsFile = new java.io.File(plugin.getDataFolder(), "player_settings.yml");
+        this.settingsConfig = new org.bukkit.configuration.file.YamlConfiguration();
+        loadSettings();
+    }
+
+    private void loadSettings() {
+        if (!settingsFile.exists()) {
+            return;
+        }
+        try {
+            settingsConfig.load(settingsFile);
+            org.bukkit.configuration.ConfigurationSection sec = settingsConfig.getConfigurationSection("volumes");
+            if (sec != null) {
+                for (String key : sec.getKeys(false)) {
+                    try {
+                        UUID uuid = UUID.fromString(key);
+                        float vol = (float) sec.getDouble(key, 1.0);
+                        volumes.put(uuid, vol);
+                    } catch (IllegalArgumentException ignored) {}
+                }
+            }
+        } catch (Exception e) {
+            plugin.getLogger().warning("Could not load player_settings.yml: " + e.getMessage());
+        }
+    }
+
+    public synchronized void saveSettings() {
+        try {
+            if (!settingsFile.exists()) {
+                settingsFile.getParentFile().mkdirs();
+                settingsFile.createNewFile();
+            }
+            for (java.util.Map.Entry<UUID, Float> entry : volumes.entrySet()) {
+                settingsConfig.set("volumes." + entry.getKey().toString(), entry.getValue());
+            }
+            settingsConfig.save(settingsFile);
+        } catch (java.io.IOException e) {
+            plugin.getLogger().warning("Could not save player_settings.yml: " + e.getMessage());
+        }
     }
 
     public void setPlaybackManager(
@@ -105,6 +147,7 @@ public final class MusicNetworkManager
 
     public void disable() {
 
+        saveSettings();
         streamer.stopAll();
         supportedPlayers.clear();
 
@@ -390,6 +433,8 @@ public final class MusicNetworkManager
                 volume
         );
 
+        plugin.getServer().getScheduler().runTaskAsynchronously(plugin, this::saveSettings);
+
         return volume;
     }
 
@@ -461,6 +506,8 @@ public final class MusicNetworkManager
 
                 supportedPlayers.add(player.getUniqueId());
                 sendHelloAck(player);
+                // Send persistent saved volume to client immediately
+                sendVolume(player, getVolume(player));
 
                 plugin.getLogger().info(
                         "VibesInDev Fabric client detected: "
@@ -884,6 +931,17 @@ public final class MusicNetworkManager
                                 + org.bukkit.ChatColor.GRAY + " [" + formatMs(positionMs) + "]"
                 );
 
+                try {
+                    player.spigot().sendMessage(
+                            net.md_5.bungee.api.ChatMessageType.ACTION_BAR,
+                            net.md_5.bungee.api.chat.TextComponent.fromLegacyText(
+                                    org.bukkit.ChatColor.GOLD + "🎵 Reconnected • Resumed: "
+                                            + org.bukkit.ChatColor.AQUA + currentTrack.title()
+                                            + org.bukkit.ChatColor.GRAY + " [" + formatMs(positionMs) + "]"
+                            )
+                    );
+                } catch (Throwable ignored) {}
+
                 for (UUID memberId : party.getMembers()) {
                     if (!memberId.equals(playerId)) {
                         Player other = plugin.getServer().getPlayer(memberId);
@@ -971,9 +1029,7 @@ public final class MusicNetworkManager
                 playerId
         );
 
-        volumes.remove(
-                playerId
-        );
+        // Keep persistent volume across disconnects - do not remove!
 
         streamer.stop(
                 event.getPlayer()

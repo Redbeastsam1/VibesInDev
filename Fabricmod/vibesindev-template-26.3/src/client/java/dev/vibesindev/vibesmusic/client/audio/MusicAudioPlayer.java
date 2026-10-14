@@ -67,7 +67,40 @@ public final class MusicAudioPlayer {
 
     private static volatile boolean playing;
 
-    private static volatile float volume = 1.0F;
+    private static final java.nio.file.Path CONFIG_FILE =
+            net.fabricmc.loader.api.FabricLoader.getInstance()
+                    .getConfigDir()
+                    .resolve("vibesindev_client.properties");
+
+    private static volatile float volume = loadVolumeFromConfig();
+
+    private static float loadVolumeFromConfig() {
+        if (java.nio.file.Files.exists(CONFIG_FILE)) {
+            try (java.io.InputStream in = java.nio.file.Files.newInputStream(CONFIG_FILE)) {
+                java.util.Properties props = new java.util.Properties();
+                props.load(in);
+                String val = props.getProperty("volume");
+                if (val != null) {
+                    float v = Float.parseFloat(val);
+                    return Math.max(0.0F, Math.min(1.0F, v));
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return 1.0F;
+    }
+
+    private static void saveVolumeToConfig(float vol) {
+        try {
+            java.nio.file.Files.createDirectories(CONFIG_FILE.getParent());
+            java.util.Properties props = new java.util.Properties();
+            props.setProperty("volume", String.valueOf(vol));
+            try (java.io.OutputStream out = java.nio.file.Files.newOutputStream(CONFIG_FILE)) {
+                props.store(out, "VibesInDev Client Configuration");
+            }
+        } catch (Exception ignored) {
+        }
+    }
 
     private static volatile boolean paused;
 
@@ -156,10 +189,12 @@ public final class MusicAudioPlayer {
             sound.updateVolume();
         }
 
+        saveVolumeToConfig(volume);
+
         System.out.println(
                 "[VibesInDev] Client volume: "
                         + Math.round(volume * 100.0F)
-                        + "%"
+                        + "% (saved to config)"
         );
     }
 

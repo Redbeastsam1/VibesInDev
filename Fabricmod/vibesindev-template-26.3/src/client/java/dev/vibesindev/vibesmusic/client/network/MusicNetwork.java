@@ -624,7 +624,6 @@ public final class MusicNetwork {
             System.out.println("[VibesInDev] Active party music found on reconnect! Resuming: "
                     + title + " - " + artist + " at " + positionMs + "ms");
 
-            dev.vibesindev.vibesmusic.client.gui.MusicHudOverlay.showReconnectNotice(title, artist, positionMs);
         } else {
             System.out.println("[VibesInDev] No active party music on reconnect.");
         }

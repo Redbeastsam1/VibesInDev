@@ -195,6 +195,9 @@ public final class MusicCommand
             case "stop" ->
                     stop(player);
 
+            case "volume", "vol" ->
+                    volume(player, args);
+
             case "status", "diagnostics", "metrics" ->
                     status(player);
                     
@@ -206,6 +209,44 @@ public final class MusicCommand
         }
 
         return true;
+    }
+
+    private void volume(Player player, String[] args) {
+        if (args.length < 2) {
+            float current = plugin.network().getVolume(player);
+            player.sendMessage(
+                    ChatColor.GOLD + "[VibesInDev] "
+                            + ChatColor.YELLOW + "Current volume: "
+                            + ChatColor.AQUA + Math.round(current * 100) + "%"
+                            + ChatColor.GRAY + " (Use " + ChatColor.WHITE + "/music volume <0-100>" + ChatColor.GRAY + " to change)"
+            );
+            return;
+        }
+
+        try {
+            int percent = Integer.parseInt(args[1]);
+            if (percent < 0 || percent > 100) {
+                player.sendMessage(
+                        ChatColor.RED + "Volume must be between 0 and 100."
+                );
+                return;
+            }
+
+            float newVol = percent / 100.0F;
+            plugin.network().setVolume(player, newVol);
+
+            player.sendMessage(
+                    ChatColor.GOLD + "[VibesInDev] "
+                            + ChatColor.GREEN + "Volume set to "
+                            + ChatColor.AQUA + percent + "%"
+                            + ChatColor.GRAY + " (saved persistently)"
+            );
+
+        } catch (NumberFormatException e) {
+            player.sendMessage(
+                    ChatColor.RED + "Invalid volume percentage: " + args[1]
+            );
+        }
     }
 
     private void status(Player player) {
@@ -1894,6 +1935,13 @@ public final class MusicCommand
 
         sender.sendMessage(
                 ChatColor.GRAY
+                        + "/music volume <0-100>"
+                        + ChatColor.WHITE
+                        + " - Set and save listening volume"
+        );
+
+        sender.sendMessage(
+                ChatColor.GRAY
                         + "/music play <song name or URL>"
         );
 
@@ -1986,9 +2034,18 @@ public final class MusicCommand
                             "diagnostics",
                             "metrics",
                             "debug",
-                            "history"
+                            "history",
+                            "volume"
                     ),
                     args[0]
+            );
+        }
+
+        if ((args[0].equalsIgnoreCase("volume") || args[0].equalsIgnoreCase("vol"))
+                && args.length == 2) {
+            return fuzzyComplete(
+                    List.of("0", "25", "50", "75", "100"),
+                    args[1]
             );
         }
 

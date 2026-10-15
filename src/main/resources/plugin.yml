@@ -2,7 +2,7 @@ name: VibesInDev
 version: 0.6.0
 main: dev.vibesindev.vibesmusic.VibesInDevPlugin
 api-version: '26.3'
-author: VibesInDev
+author: Redbeastsam
 description: Music source resolver and client-side playback backend.
 
 commands:

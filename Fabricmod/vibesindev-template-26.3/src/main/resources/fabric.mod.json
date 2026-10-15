@@ -3,13 +3,13 @@
 	"id": "vibesindev",
 	"version": "${version}",
 	"name": "VibesInDev",
-	"description": "This is an example description! Tell everyone what your mod is about!",
+	"description": "Real-time audio streaming and client-side music playback for VibesInDev.",
 	"authors": [
-		"Me!"
+		"Redbeastsam"
 	],
 	"contact": {
-		"homepage": "https://fabricmc.net/",
-		"sources": "https://github.com/FabricMC/fabric-example-mod"
+		"homepage": "https://github.com/Redbeastsam",
+		"sources": "https://github.com/Redbeastsam/VibesInDev"
 	},
 	"license": "CC0-1.0",
 	"icon": "assets/vibesindev/icon.png",

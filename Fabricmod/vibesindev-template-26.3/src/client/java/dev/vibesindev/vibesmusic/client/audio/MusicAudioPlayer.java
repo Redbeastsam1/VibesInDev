@@ -702,7 +702,7 @@ public final class MusicAudioPlayer {
             this.resume = resume;
             this.initialSeekMs = initialSeekMs;
 
-            this.volume = Math.max(0.01F, MusicAudioPlayer.volume);
+            this.volume = MusicAudioPlayer.volume;
 
             this.pitch = 1.0F;
             this.looping = false;
@@ -718,7 +718,12 @@ public final class MusicAudioPlayer {
 
         @Override
         public float getVolume() {
-            return Math.max(0.01F, MusicAudioPlayer.volume);
+            return MusicAudioPlayer.volume;
+        }
+
+        @Override
+        public boolean canStartSilent() {
+            return true;
         }
 
         private void updateVolume() {

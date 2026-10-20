@@ -40,7 +40,7 @@ public final class MusicAudioPlayer {
      */
     private static final long RECOVERY_REWIND_MILLIS = 250L;
 
-    private static final long RECOVERY_TIMEOUT_MILLIS = 6000L;
+    private static final long RECOVERY_TIMEOUT_MILLIS = 12000L;
 
     private static final int MAX_RECOVERY_ATTEMPTS = 5;
 
@@ -449,6 +449,10 @@ public final class MusicAudioPlayer {
                 .isActive(sound)) {
 
             if (recovering) {
+                // Wait until the decoder has actually finished seeking and initialized the tracking stream
+                if (sound.trackingStream == null) {
+                    return;
+                }
                 recovering = false;
                 recoveryAttempts = 0;
                 recoveryStartedAtMillis = 0;
@@ -840,6 +844,11 @@ public final class MusicAudioPlayer {
                                     target
                             );
 
+                            if (MusicAudioPlayer.currentSound != this) {
+                                input.close();
+                                throw new IOException("Sound instance superseded by newer seek or playback action.");
+                            }
+
                             playedPcmBytes =
                                     target;
                             recoveryTargetBytes =
@@ -929,6 +938,10 @@ public final class MusicAudioPlayer {
             long skipped = 0;
 
             while (skipped < targetBytes) {
+                // Abort immediately if a newer seek or sound was triggered
+                if (MusicAudioPlayer.currentSound != this) {
+                    return;
+                }
 
                 int remaining =
                         (int) Math.min(

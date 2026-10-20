@@ -9,7 +9,7 @@ import java.util.UUID;
 public final class MusicStreamBuffer {
 
     private static final long READ_WAIT_MILLIS = 250L;
-    private static final long MAX_UNDERRUN_WAIT_MILLIS = 3000L;
+    private static final long MAX_UNDERRUN_WAIT_MILLIS = 15000L;
 
     private static volatile StreamSession current;
 

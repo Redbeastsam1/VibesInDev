@@ -503,34 +503,12 @@ final class MusicStreamer {
     private long calculateDelay(
             StreamSession session
     ) {
-
         /*
-         * Pace transmission approximately according to
-         * the real playback duration.
-         *
-         * bytes / duration = bytes per second.
+         * Stream chunks continuously at 1 tick (50ms) per chunk.
+         * This rapidly fills the client's audio buffer within a few seconds,
+         * completely preventing buffer underruns during playback, seeking, and dimension switches.
          */
-        if (session.track.durationSeconds() <= 0) {
-            return MIN_CHUNK_DELAY_TICKS;
-        }
-
-        double bytesPerSecond =
-                (double) session.totalBytes
-                        / session.track.durationSeconds();
-
-        double secondsPerChunk =
-                session.chunkSize
-                        / bytesPerSecond;
-
-        long ticks =
-                Math.round(
-                        secondsPerChunk * 20.0
-                );
-
-        return Math.max(
-                MIN_CHUNK_DELAY_TICKS,
-                ticks
-        );
+        return MIN_CHUNK_DELAY_TICKS;
     }
 
     private void finish(
@@ -567,6 +545,20 @@ final class MusicStreamer {
         StreamSession session = sessions.get(player.getUniqueId());
         if (session == null || session.cancelled) {
             return;
+        }
+
+        /*
+         * If the client needs audio chunks up to positionMs to seek forward,
+         * burst-send all required chunks immediately so the client decoder
+         * has all necessary OGG data without suffering a buffer underrun.
+         */
+        if (session.track.durationSeconds() > 0 && session.totalBytes > 0) {
+            long targetByte = (positionMs * session.totalBytes) / (session.track.durationSeconds() * 1000L);
+            int targetChunk = (int) (targetByte / session.chunkSize);
+            int neededSequence = Math.min(session.totalChunks, targetChunk + 48);
+            while (session.sequence < neededSequence && !session.cancelled && !session.paused) {
+                sendNextImmediate(session);
+            }
         }
 
         if (network.isSupported(player) && player.isOnline()) {

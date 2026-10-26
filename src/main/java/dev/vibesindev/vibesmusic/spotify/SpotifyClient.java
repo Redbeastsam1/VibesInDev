@@ -6,7 +6,11 @@ import dev.vibesindev.vibesmusic.VibesInDevPlugin;
 import dev.vibesindev.vibesmusic.audio.YtDlpManager;
 import dev.vibesindev.vibesmusic.model.Track;
 
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.util.Properties;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
@@ -95,11 +99,62 @@ public final class SpotifyClient {
                 "spotify.market",
                 "IN"
         );
+        loadSavedTokens();
     }
 
     public boolean isConfigured() {
         return !clientId.isBlank() && !clientSecret.isBlank();
     }
+
+    private void loadSavedTokens() {
+        try {
+            File file = new File(plugin.getDataFolder(), ".spotify_tokens");
+            if (!file.exists()) return;
+            Properties props = new Properties();
+            try (FileInputStream in = new FileInputStream(file)) {
+                props.load(in);
+            }
+            String access = props.getProperty("access_token");
+            String refresh = props.getProperty("refresh_token");
+            String expires = props.getProperty("expires_at");
+            if (access != null && !access.isBlank()) {
+                this.userAccessToken = access;
+            }
+            if (refresh != null && !refresh.isBlank()) {
+                this.userRefreshToken = refresh;
+            }
+            if (expires != null) {
+                try {
+                    this.userTokenExpiresAt = Long.parseLong(expires);
+                } catch (NumberFormatException ignored) {}
+            }
+            if (userRefreshToken != null && !userRefreshToken.isBlank()) {
+                plugin.getLogger().info("[VibesInDev] Loaded saved Spotify user authentication.");
+            }
+        } catch (Exception e) {
+            plugin.getLogger().warning("[VibesInDev] Could not load saved Spotify tokens: " + e.getMessage());
+        }
+    }
+
+    private void saveTokens() {
+        try {
+            File dir = plugin.getDataFolder();
+            if (!dir.exists()) {
+                dir.mkdirs();
+            }
+            File file = new File(dir, ".spotify_tokens");
+            Properties props = new Properties();
+            if (userAccessToken != null) props.setProperty("access_token", userAccessToken);
+            if (userRefreshToken != null) props.setProperty("refresh_token", userRefreshToken);
+            props.setProperty("expires_at", String.valueOf(userTokenExpiresAt));
+            try (FileOutputStream out = new FileOutputStream(file)) {
+                props.store(out, "Spotify OAuth Tokens");
+            }
+        } catch (Exception e) {
+            plugin.getLogger().warning("[VibesInDev] Could not save Spotify tokens: " + e.getMessage());
+        }
+    }
+
 
     public CompletableFuture<Track> resolveTrack(String input) {
         return getTrackId(input)
@@ -199,10 +254,11 @@ public final class SpotifyClient {
 
             URI redirect = URI.create(redirectUri);
 
-            if (!"127.0.0.1".equalsIgnoreCase(redirect.getHost())) {
+            if (!"127.0.0.1".equalsIgnoreCase(redirect.getHost())
+                    && !"localhost".equalsIgnoreCase(redirect.getHost())) {
                 throw new IllegalStateException(
                         "For the built-in login flow, spotify.redirect-uri "
-                                + "must use 127.0.0.1."
+                                + "must use 127.0.0.1 or localhost."
                 );
             }
 
@@ -210,7 +266,7 @@ public final class SpotifyClient {
 
             callbackServer = HttpServer.create(
                     new InetSocketAddress(
-                            redirect.getHost(),
+                            "127.0.0.1",
                             redirect.getPort() > 0
                                     ? redirect.getPort()
                                     : 80
@@ -361,6 +417,8 @@ public final class SpotifyClient {
                 System.currentTimeMillis()
                         + Math.max(60, expiresIn - 60) * 1000L;
 
+        saveTokens();
+
         plugin.getLogger().info(
                 "Spotify authorization completed."
         );
@@ -464,7 +522,11 @@ public final class SpotifyClient {
     }
 
     private CompletableFuture<SpotifyTrack> getTrack(String id) {
-        return getClientToken().thenCompose(token -> {
+        CompletableFuture<String> tokenFuture = hasUserAuthorization()
+                ? getUserToken()
+                : getClientToken();
+
+        return tokenFuture.thenCompose(token -> {
             String url =
                     API_URL
                             + "/tracks/"
@@ -535,7 +597,11 @@ public final class SpotifyClient {
     private CompletableFuture<List<SpotifyTrack>> getPlaylistItems(
             String playlistId
     ) {
-        return getClientToken().thenCompose(
+        CompletableFuture<String> tokenFuture = hasUserAuthorization()
+                ? getUserToken()
+                : getClientToken();
+
+        return tokenFuture.thenCompose(
                 token -> getPlaylistPage(
                         playlistId,
                         token,
@@ -555,7 +621,7 @@ public final class SpotifyClient {
                 API_URL
                         + "/playlists/"
                         + enc(playlistId)
-                        + "/items?limit=50&offset="
+                        + "/tracks?limit=50&offset="
                         + offset
                         + "&market="
                         + enc(market);
@@ -585,13 +651,29 @@ public final class SpotifyClient {
                     }
 
                     if (response.statusCode() == 403) {
-                        plugin.getLogger().warning("[VibesInDev] Spotify 403 for playlist " + playlistId + " — may be private.");
+                        plugin.getLogger().warning("[VibesInDev] Spotify 403 for playlist " + playlistId);
                         return CompletableFuture.failedFuture(
                                 new IllegalStateException(
-                                        "Cannot access this playlist. It may be private. "
-                                                + "Only public playlists are supported without login."
+                                        "Cannot access this playlist (403 Forbidden). Run /music spotify login."
                                 )
                         );
+                    }
+
+                    if (response.statusCode() == 404) {
+                        plugin.getLogger().warning("[VibesInDev] Spotify playlist HTTP 404 for " + playlistId + " (userAuthorized=" + hasUserAuthorization() + ")");
+                        if (!hasUserAuthorization()) {
+                            return CompletableFuture.failedFuture(
+                                    new IllegalStateException(
+                                            "Spotify playlist not found or private. Run '/music spotify login' to access private/collaborative playlists, or make the playlist public in Spotify."
+                                    )
+                            );
+                        } else {
+                            return CompletableFuture.failedFuture(
+                                    new IllegalStateException(
+                                            "Spotify playlist not found (404). Verify the link or check playlist permissions in Spotify."
+                                    )
+                            );
+                        }
                     }
 
                     if (response.statusCode() != 200) {
@@ -633,38 +715,113 @@ public final class SpotifyClient {
     }
 
     private CompletableFuture<String> getUserToken() {
-        if (hasUserAuthorization()
+        if (userAccessToken != null
+                && !userAccessToken.isBlank()
                 && System.currentTimeMillis() < userTokenExpiresAt) {
             return CompletableFuture.completedFuture(
                     userAccessToken
             );
         }
 
-        if (userRefreshToken == null
-                || userRefreshToken.isBlank()) {
-            return CompletableFuture.failedFuture(
-                    new IllegalStateException(
-                            "Spotify login required. Run /music spotify login."
-                    )
-            );
+        if (userRefreshToken != null && !userRefreshToken.isBlank()) {
+            return refreshUserToken();
         }
 
         return CompletableFuture.failedFuture(
                 new IllegalStateException(
-                        "Spotify access token expired. Run /music spotify login again."
+                        "Spotify login required. Run /music spotify login."
                 )
         );
     }
 
-    private boolean hasUserAuthorization() {
-        return userAccessToken != null
-                && !userAccessToken.isBlank();
+    private CompletableFuture<String> refreshUserToken() {
+        String body =
+                "grant_type=refresh_token"
+                        + "&refresh_token=" + enc(userRefreshToken);
+
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(ACCOUNTS_URL + "/api/token"))
+                .timeout(Duration.ofSeconds(15))
+                .header(
+                        "Authorization",
+                        "Basic " + Base64.getEncoder().encodeToString(
+                                (clientId + ":" + clientSecret)
+                                        .getBytes(StandardCharsets.UTF_8)
+                        )
+                )
+                .header(
+                        "Content-Type",
+                        "application/x-www-form-urlencoded"
+                )
+                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .build();
+
+        return http.sendAsync(
+                        request,
+                        HttpResponse.BodyHandlers.ofString()
+                )
+                .thenCompose(response -> {
+                    if (response.statusCode() != 200) {
+                        plugin.getLogger().warning("[VibesInDev] Spotify user token refresh failed (HTTP "
+                                + response.statusCode() + "). Body: " + response.body());
+                        return CompletableFuture.failedFuture(
+                                new IllegalStateException(
+                                        "Spotify session expired. Run /music spotify login again."
+                                )
+                        );
+                    }
+
+                    String newAccess = string(
+                            response.body(),
+                            "access_token"
+                    );
+
+                    if (newAccess == null || newAccess.isBlank()) {
+                        return CompletableFuture.failedFuture(
+                                new IllegalStateException("Refreshed Spotify response contained no access_token.")
+                        );
+                    }
+
+                    userAccessToken = newAccess;
+
+                    String newRefresh = string(
+                            response.body(),
+                            "refresh_token"
+                    );
+                    if (newRefresh != null && !newRefresh.isBlank()) {
+                        userRefreshToken = newRefresh;
+                    }
+
+                    long expiresIn = numberLong(
+                            response.body(),
+                            "expires_in",
+                            3600
+                    );
+
+                    userTokenExpiresAt =
+                            System.currentTimeMillis()
+                                    + Math.max(60, expiresIn - 60) * 1000L;
+
+                    saveTokens();
+
+                    plugin.getLogger().info("[VibesInDev] Refreshed Spotify user access token successfully.");
+                    return CompletableFuture.completedFuture(userAccessToken);
+                });
+    }
+
+    public boolean hasUserAuthorization() {
+        return (userAccessToken != null && !userAccessToken.isBlank() && System.currentTimeMillis() < userTokenExpiresAt)
+                || (userRefreshToken != null && !userRefreshToken.isBlank());
     }
 
     private CompletableFuture<List<SpotifyTrack>> getAlbumItems(
             String albumId
     ) {
-        return getClientToken().thenCompose(
+        CompletableFuture<String> tokenFuture = hasUserAuthorization()
+                ? getUserToken()
+                : getClientToken();
+
+        return tokenFuture.thenCompose(
                 token -> getAlbumPage(
                         albumId,
                         token,

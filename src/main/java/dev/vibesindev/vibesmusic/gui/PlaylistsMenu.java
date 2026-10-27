@@ -77,7 +77,7 @@ public final class PlaylistsMenu implements Listener {
                     )));
         } else {
             List<CustomPlaylist> sorted = new ArrayList<>(userPlaylists.values());
-            sorted.sort(Comparator.comparing(CustomPlaylist::name, String.CASE_INSENSITIVE_ORDER));
+            sorted.sort(Comparator.comparing(p -> p.name(), String.CASE_INSENSITIVE_ORDER));
 
             int[] contentSlots = {
                     10, 11, 12, 13, 14, 15, 16,

@@ -1,12 +1,11 @@
 package dev.vibesindev.vibesmusic.metrics;
 
 import dev.vibesindev.vibesmusic.VibesInDevPlugin;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 public final class MetricsManager {
 
+    @SuppressWarnings("unused")
     private final VibesInDevPlugin plugin;
 
     private final AtomicLong tracksRequested = new AtomicLong();

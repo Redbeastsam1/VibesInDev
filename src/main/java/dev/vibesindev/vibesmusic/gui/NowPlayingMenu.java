@@ -61,7 +61,7 @@ public final class NowPlayingMenu implements Listener {
         Track track = (session != null) ? session.getTrack() : null;
 
         // --- Slot 4: track info ---
-        if (track != null) {
+        if (track != null && session != null) {
             List<String> lore = new ArrayList<>();
             lore.add(ChatColor.GRAY + "Artist: " + ChatColor.WHITE + track.artist());
             lore.add(ChatColor.GRAY + "Duration: " + ChatColor.WHITE + track.durationText());

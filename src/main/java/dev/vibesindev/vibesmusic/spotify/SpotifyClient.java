@@ -11,7 +11,6 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.Properties;
-import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.URI;
@@ -20,15 +19,12 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
-import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -46,13 +42,8 @@ public final class SpotifyClient {
     private static final Pattern NUMBER =
             Pattern.compile("\"([^\"]+)\"\\s*:\\s*([0-9]+(?:\\.[0-9]+)?)");
 
-    private static final Pattern ARRAY_OBJECT =
-            Pattern.compile(
-                    "\"item\"\\s*:\\s*\\{(.*?)\\}",
-                    Pattern.DOTALL
-            );
-
     private final VibesInDevPlugin plugin;
+    @SuppressWarnings("unused")
     private final YtDlpManager ytDlp;
     private final HttpClient http;
 
@@ -973,22 +964,6 @@ public final class SpotifyClient {
             // Malformed JSON — return whatever we collected so far
         }
         return result;
-    }
-
-    private static String firstArtistName(String json) {
-        int artistsIndex = json.indexOf("\"artists\"");
-
-        if (artistsIndex < 0) {
-            return "Unknown";
-        }
-
-        String tail = json.substring(artistsIndex);
-
-        String name = string(tail, "name");
-
-        return name == null || name.isBlank()
-                ? "Unknown"
-                : name;
     }
 
     private static String extractId(

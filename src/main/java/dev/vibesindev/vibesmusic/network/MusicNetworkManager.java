@@ -17,7 +17,6 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
-import dev.vibesindev.vibesmusic.model.Track;
 import dev.vibesindev.vibesmusic.party.MusicParty;
 import org.bukkit.Bukkit;
 
@@ -910,7 +909,7 @@ public final class MusicNetworkManager
                 try {
                     player.spigot().sendMessage(
                             net.md_5.bungee.api.ChatMessageType.ACTION_BAR,
-                            net.md_5.bungee.api.chat.TextComponent.fromLegacyText(
+                            net.md_5.bungee.api.chat.TextComponent.fromLegacy(
                                     org.bukkit.ChatColor.GOLD + "🎵 Reconnected • Resumed: "
                                             + org.bukkit.ChatColor.AQUA + currentTrack.title()
                                             + org.bukkit.ChatColor.GRAY + " [" + formatMs(positionMs) + "]"

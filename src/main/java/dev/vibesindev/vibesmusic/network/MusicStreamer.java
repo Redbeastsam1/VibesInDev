@@ -700,6 +700,7 @@ final class MusicStreamer {
         private final UUID playerId;
         private final UUID streamId;
         private final Track track;
+        @SuppressWarnings("unused")
         private final Path file;
         private final FileChannel channel;
         private final int chunkSize;

@@ -7,7 +7,6 @@ import org.bukkit.ChatColor;
 import org.bukkit.entity.Player;
 
 import java.nio.file.Path;
-import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -71,6 +70,9 @@ public final class MusicPlaybackManager {
             
             plugin.getServer().getScheduler().runTaskTimerAsynchronously(plugin, () -> {
                 for (Player player : plugin.getServer().getOnlinePlayers()) {
+                    if (player == null) {
+                        continue;
+                    }
                     if (plugin.network().isPlaying(player)) {
                         PlaybackSession session = null;
                         
@@ -109,6 +111,9 @@ public final class MusicPlaybackManager {
             }
 
             for (Player player : plugin.getServer().getOnlinePlayers()) {
+                if (player == null) {
+                    continue;
+                }
                 UUID uuid = player.getUniqueId();
                 if (plugin.network().isPlaying(player) && !plugin.network().isPaused(player)) {
                     Track current = plugin.queues().current(uuid);
@@ -1169,7 +1174,7 @@ public final class MusicPlaybackManager {
                 partyGenerations.merge(
                         partyId,
                         1L,
-                        Long::sum
+                        (a, b) -> a + b
                 );
 
         party.setCurrentTrack(track);
@@ -1432,7 +1437,7 @@ public final class MusicPlaybackManager {
         partyGenerations.merge(
                 party.getPartyId(),
                 1L,
-                Long::sum
+                (a, b) -> a + b
         );
 
         stopPartyStreams(party);
@@ -1504,7 +1509,7 @@ public final class MusicPlaybackManager {
                 generations.merge(
                         uuid,
                         1L,
-                        Long::sum
+                        (a, b) -> a + b
                 );
 
         plugin.queues().setCurrent(
@@ -1762,7 +1767,7 @@ public final class MusicPlaybackManager {
         generations.merge(
                 player.getUniqueId(),
                 1L,
-                Long::sum
+                (a, b) -> a + b
         );
         
         PlaybackSession session = sessions.get(player.getUniqueId());
@@ -1864,7 +1869,7 @@ public final class MusicPlaybackManager {
                     + ChatColor.DARK_GRAY + " [" + ChatColor.GRAY + track.durationText() + ChatColor.DARK_GRAY + "]";
             player.spigot().sendMessage(
                     net.md_5.bungee.api.ChatMessageType.ACTION_BAR,
-                    net.md_5.bungee.api.chat.TextComponent.fromLegacyText(bar)
+                    net.md_5.bungee.api.chat.TextComponent.fromLegacy(bar)
             );
         } catch (Throwable ignored) {
         }
@@ -1875,7 +1880,7 @@ public final class MusicPlaybackManager {
         try {
             player.spigot().sendMessage(
                     net.md_5.bungee.api.ChatMessageType.ACTION_BAR,
-                    net.md_5.bungee.api.chat.TextComponent.fromLegacyText(message)
+                    net.md_5.bungee.api.chat.TextComponent.fromLegacy(message)
             );
         } catch (Throwable ignored) {
         }

@@ -104,7 +104,7 @@ public final class ProcessRunner {
         for (ActiveProcess p : activeProcesses.values()) {
             if (p.command().contains(term)) {
                 try {
-                    ProcessHandle.of(p.pid()).ifPresent(ProcessHandle::destroyForcibly);
+                    ProcessHandle.of(p.pid()).ifPresent(handle -> handle.destroyForcibly());
                 } catch (Exception ignored) {
                 }
             }

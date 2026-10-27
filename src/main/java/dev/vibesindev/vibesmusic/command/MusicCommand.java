@@ -1,7 +1,6 @@
 package dev.vibesindev.vibesmusic.command;
 
 import dev.vibesindev.vibesmusic.VibesInDevPlugin;
-import dev.vibesindev.vibesmusic.gui.MusicMenu;
 import dev.vibesindev.vibesmusic.model.Track;
 import dev.vibesindev.vibesmusic.party.MusicParty;
 import dev.vibesindev.vibesmusic.party.MusicPartyManager;
@@ -723,8 +722,6 @@ public final class MusicCommand
             return;
         }
 
-        UUID oldOwner = invited.getOwner();
-
         if (!plugin.parties().acceptInvitation(
                 player.getUniqueId()
         )) {
@@ -775,7 +772,6 @@ public final class MusicCommand
             return;
         }
 
-        boolean wasOwner = party.isOwner(player.getUniqueId());
         List<UUID> members = List.copyOf(party.getMembers());
 
         if (plugin.network().isSupported(player)) {
@@ -2245,7 +2241,7 @@ public final class MusicCommand
             return fuzzyComplete(
                     Bukkit.getOnlinePlayers()
                             .stream()
-                            .map(Player::getName)
+                            .map(p -> p.getName())
                             .sorted(String.CASE_INSENSITIVE_ORDER)
                             .toList(),
                     args[2]

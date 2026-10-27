@@ -511,6 +511,13 @@ public final class MusicNetworkManager
             // Send persistent saved volume to client immediately
             sendVolume(player, getVolume(player));
 
+            // Delayed re-sync (10 ticks) in case client audio engine / world loading was still initializing
+            plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
+                if (player.isOnline() && isSupported(player)) {
+                    sendVolume(player, getVolume(player));
+                }
+            }, 10L);
+
             plugin.getLogger().info(
                     "VibesInDev Fabric client detected: "
                             + player.getName()
@@ -572,6 +579,8 @@ public final class MusicNetworkManager
             int chunkSize,
             int totalChunks
     ) {
+        // Auto-sync volume guarantee: re-send saved volume on track start so client never gets stuck at 100%
+        sendVolume(player, getVolume(player));
 
         byte[] title =
                 track.title()
@@ -743,9 +752,18 @@ public final class MusicNetworkManager
             Player player,
             float volume
     ) {
+        if (player == null || !player.isOnline()) {
+            return;
+        }
+
+        // Apply quadratic perceptual curve: gain = volume^2
+        // Linear 10% (0.10) becomes 0.01 (-40 dB), 50% (0.50) becomes 0.25 (-12 dB), 100% (1.00) becomes 1.0 (0 dB)
+        float clamped = Math.max(0.0F, Math.min(1.0F, volume));
+        float gain = clamped * clamped;
+
         byte[] packet = new byte[5];
         packet[0] = OP_VOLUME;
-        writeIntBytes(packet, 1, Float.floatToIntBits(volume));
+        writeIntBytes(packet, 1, Float.floatToIntBits(gain));
 
         player.sendPluginMessage(
                 plugin,
@@ -758,6 +776,9 @@ public final class MusicNetworkManager
             Player player,
             UUID streamId
     ) {
+        // Auto-sync volume guarantee: re-send saved volume on resume
+        sendVolume(player, getVolume(player));
+
         byte[] packet = new byte[17];
         packet[0] = OP_RESUME;
         writeUuidBytes(packet, 1, streamId);

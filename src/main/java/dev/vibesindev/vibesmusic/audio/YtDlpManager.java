@@ -70,6 +70,7 @@ public final class YtDlpManager {
         return args;
     }
 
+    @SuppressWarnings("null")
     public CompletableFuture<Track> resolve(String input) {
         return CompletableFuture.supplyAsync(() -> {
             try {

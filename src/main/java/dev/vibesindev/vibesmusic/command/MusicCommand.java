@@ -16,6 +16,7 @@ import net.md_5.bungee.api.chat.HoverEvent;
 import net.md_5.bungee.api.chat.TextComponent;
 import net.md_5.bungee.api.chat.hover.content.Text;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
@@ -2238,14 +2239,14 @@ public final class MusicCommand
                 && args[1].equalsIgnoreCase("invite")
                 && args.length == 3) {
 
-            return fuzzyComplete(
-                    Bukkit.getOnlinePlayers()
-                            .stream()
-                            .map(p -> p.getName())
-                            .sorted(String.CASE_INSENSITIVE_ORDER)
-                            .toList(),
-                    args[2]
-            );
+            List<String> playerNames = new ArrayList<>();
+            for (Player p : Bukkit.getOnlinePlayers()) {
+                if (p != null) {
+                    playerNames.add(p.getName());
+                }
+            }
+            playerNames.sort(String.CASE_INSENSITIVE_ORDER);
+            return fuzzyComplete(playerNames, args[2]);
         }
 
         /*

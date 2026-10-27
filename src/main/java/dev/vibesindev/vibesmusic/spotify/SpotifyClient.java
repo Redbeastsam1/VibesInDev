@@ -147,6 +147,7 @@ public final class SpotifyClient {
     }
 
 
+    @SuppressWarnings("null")
     public CompletableFuture<Track> resolveTrack(String input) {
         return getTrackId(input)
                 .thenCompose(this::getTrack)
@@ -512,6 +513,7 @@ public final class SpotifyClient {
         return CompletableFuture.completedFuture(id);
     }
 
+    @SuppressWarnings("null")
     private CompletableFuture<SpotifyTrack> getTrack(String id) {
         CompletableFuture<String> tokenFuture = hasUserAuthorization()
                 ? getUserToken()

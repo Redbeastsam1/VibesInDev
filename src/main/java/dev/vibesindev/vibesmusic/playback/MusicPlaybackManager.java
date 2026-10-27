@@ -1663,6 +1663,7 @@ public final class MusicPlaybackManager {
                 });
     }
 
+    @SuppressWarnings("null")
     private CompletableFuture<Path> prepareTrack(
             Track track
     ) {

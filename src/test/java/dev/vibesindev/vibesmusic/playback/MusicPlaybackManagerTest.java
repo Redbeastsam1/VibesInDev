@@ -39,6 +39,7 @@ class MusicPlaybackManagerTest {
     private final UUID playerId = UUID.randomUUID();
 
     @BeforeEach
+    @SuppressWarnings("null")
     void setUp() {
         // Only lenient stubs or those definitely needed in setup
         lenient().when(plugin.getServer()).thenReturn(server);

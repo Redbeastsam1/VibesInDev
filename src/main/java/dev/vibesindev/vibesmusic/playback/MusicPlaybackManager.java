@@ -1382,6 +1382,9 @@ public final class MusicPlaybackManager {
                                                 )) {
                                                     plugin.metrics().incrementTracksPlayed();
                                                     started.add(member);
+                                                    if (plugin.recommendations() != null) {
+                                                        plugin.recommendations().recordPlay(member, track);
+                                                    }
                                                 }
                                             }
 
@@ -1765,6 +1768,9 @@ public final class MusicPlaybackManager {
                                             }
 
                                             plugin.metrics().incrementTracksPlayed();
+                                            if (plugin.recommendations() != null) {
+                                                plugin.recommendations().recordPlay(uuid, track);
+                                            }
 
                                             PlaybackSession currentSession = sessions.get(uuid);
                                             if (currentSession != null && currentSession.getGeneration() == generation) {

@@ -30,7 +30,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class PlayerTasteProfile {
 
     /** Timestamped record of a played track to enforce time-based and count-based cooldowns. */
-    public record FatigueEntry(String trackId, String artist, long playedAt) {}
+    public record FatigueEntry(String trackId, String artist, String title, long playedAt) {}
 
     private final UUID playerUuid;
 
@@ -57,6 +57,50 @@ public final class PlayerTasteProfile {
      * Normalized lowercase -> set of connected artist names.
      */
     private static final Map<String, Set<String>> STATIC_LINEAGE_GRAPH = new ConcurrentHashMap<>();
+    // =========================================================
+    // CANONICAL TITLE MATCHING & REMIX/SLOWED DEDUPLICATION
+    // =========================================================
+
+    public static String canonicalizeTitle(String title, String artist) {
+        if (title == null) return "";
+        String s = title.toLowerCase(Locale.ROOT).trim();
+        if (artist != null && !artist.isBlank()) {
+            String a = artist.toLowerCase(Locale.ROOT).trim();
+            if (s.startsWith(a + " - ") || s.startsWith(a + " – ") || s.startsWith(a + ": ")) {
+                s = s.substring(a.length() + 3).trim();
+            }
+        }
+        // Remove parenthesized or bracketed metadata: (Slowed), [Official Video], (feat. ...), (Single 2025)
+        s = s.replaceAll("\\s*\\([^)]*\\)", "").replaceAll("\\s*\\[[^]]*\\]", "");
+        // Remove common version keywords outside brackets
+        s = s.replaceAll("(?i)\\b(slowed\\s*\\+?\\s*reverb|slowed|reverb|sped\\s*up|speed\\s*up|nightcore|remix|official\\s*video|official\\s*audio|lyric\\s*video|visualizer|single\\s*\\d{4}|feat\\.?.*|ft\\.?.*)\\b", "");
+        // Remove non-alphanumeric characters
+        s = s.replaceAll("[^a-z0-9\\s]", " ");
+        // Collapse spaces
+        s = s.replaceAll("\\s+", " ").trim();
+        return s;
+    }
+
+    public static boolean isSameSongOrRemix(Track a, Track b) {
+        if (a == null || b == null) return false;
+        if (a.id() != null && b.id() != null && a.id().equalsIgnoreCase(b.id())) {
+            return true;
+        }
+        String canA = canonicalizeTitle(a.title(), a.artist());
+        String canB = canonicalizeTitle(b.title(), b.artist());
+        if (!canA.isEmpty() && canA.equals(canB)) {
+            return true;
+        }
+        if (!canA.isEmpty() && !canB.isEmpty() && (canA.contains(canB) || canB.contains(canA))) {
+            String artA = a.artist() != null ? a.artist().toLowerCase(Locale.ROOT).trim() : "";
+            String artB = b.artist() != null ? b.artist().toLowerCase(Locale.ROOT).trim() : "";
+            if (artA.contains(artB) || artB.contains(artA)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
 
     static {
         registerStaticLineage("one direction", "harry styles", "zayn", "niall horan", "louis tomlinson", "liam payne");
@@ -155,8 +199,8 @@ public final class PlayerTasteProfile {
         String trackId = track.id();
         String artist = track.artist().toLowerCase(Locale.ROOT).trim();
 
-        // 1. Fatigue tracking
-        fatigueHistory.addLast(new FatigueEntry(trackId, artist, now));
+        // 1. Fatigue tracking (with canonical title!)
+        fatigueHistory.addLast(new FatigueEntry(trackId, track.artist(), track.title(), now));
         while (fatigueHistory.size() > 50) {
             fatigueHistory.removeFirst();
         }
@@ -197,6 +241,10 @@ public final class PlayerTasteProfile {
         if (track == null) return;
         long sevenDays = 7L * 24 * 60 * 60 * 1000L;
         dislikedTracks.put(track.id(), System.currentTimeMillis() + sevenDays);
+        fatigueHistory.addLast(new FatigueEntry(track.id(), track.artist(), track.title(), System.currentTimeMillis()));
+        while (fatigueHistory.size() > 50) {
+            fatigueHistory.removeFirst();
+        }
         String artist = track.artist().toLowerCase(Locale.ROOT).trim();
         downweightArtist(artist, 0.50);
     }
@@ -206,6 +254,12 @@ public final class PlayerTasteProfile {
      */
     public synchronized void recordSkip(Track track) {
         if (track == null) return;
+        // SKIPPED TRACKS MUST ENTER FATIGUE COOLDOWN SO THEY ARE NOT RECOMMENDED AGAIN
+        long now = System.currentTimeMillis();
+        fatigueHistory.addLast(new FatigueEntry(track.id(), track.artist(), track.title(), now));
+        while (fatigueHistory.size() > 50) {
+            fatigueHistory.removeFirst();
+        }
         String artist = track.artist().toLowerCase(Locale.ROOT).trim();
         downweightArtist(artist, 0.20);
     }
@@ -438,26 +492,49 @@ public final class PlayerTasteProfile {
     /**
      * Checks if a track is in the fatigue cooldown (last 20 tracks, played within last 45 minutes, or disliked within 7 days).
      */
-    public synchronized boolean isFatigued(String trackId, int cooldownTracks, long cooldownMs) {
-        if (trackId == null) return false;
+    public synchronized boolean isFatigued(Track track, int cooldownTracks, long cooldownMs) {
+        if (track == null) return false;
+        return isFatigued(track.id(), track.title(), track.artist(), cooldownTracks, cooldownMs);
+    }
+
+    public synchronized boolean isFatigued(String trackId, String title, String artist, int cooldownTracks, long cooldownMs) {
+        if (trackId == null && title == null) return false;
 
         // Check 7-day dislike soft ban
-        Long dislikeExpiry = dislikedTracks.get(trackId);
-        if (dislikeExpiry != null) {
-            if (System.currentTimeMillis() < dislikeExpiry) {
-                return true;
-            } else {
-                dislikedTracks.remove(trackId);
+        if (trackId != null) {
+            Long dislikeExpiry = dislikedTracks.get(trackId);
+            if (dislikeExpiry != null) {
+                if (System.currentTimeMillis() < dislikeExpiry) {
+                    return true;
+                } else {
+                    dislikedTracks.remove(trackId);
+                }
             }
         }
 
+        String canTitle = canonicalizeTitle(title, artist);
+        String normArtist = artist != null ? artist.toLowerCase(Locale.ROOT).trim() : "";
         long cutoff = System.currentTimeMillis() - cooldownMs;
 
         int indexFromEnd = 0;
         Iterator<FatigueEntry> it = fatigueHistory.descendingIterator();
         while (it.hasNext()) {
             FatigueEntry entry = it.next();
-            if (entry.trackId().equals(trackId)) {
+            boolean idMatch = trackId != null && trackId.equalsIgnoreCase(entry.trackId());
+            boolean titleMatch = false;
+            if (!canTitle.isEmpty()) {
+                String entryCan = canonicalizeTitle(entry.title(), entry.artist());
+                if (canTitle.equals(entryCan)) {
+                    titleMatch = true;
+                } else if ((canTitle.contains(entryCan) || entryCan.contains(canTitle)) && !normArtist.isEmpty()) {
+                    String entryArt = entry.artist() != null ? entry.artist().toLowerCase(Locale.ROOT).trim() : "";
+                    if (normArtist.contains(entryArt) || entryArt.contains(normArtist)) {
+                        titleMatch = true;
+                    }
+                }
+            }
+
+            if (idMatch || titleMatch) {
                 if (indexFromEnd < cooldownTracks) {
                     return true; // within last N tracks
                 }
@@ -470,6 +547,10 @@ public final class PlayerTasteProfile {
         }
 
         return false;
+    }
+
+    public synchronized boolean isFatigued(String trackId, int cooldownTracks, long cooldownMs) {
+        return isFatigued(trackId, null, null, cooldownTracks, cooldownMs);
     }
 
     /**

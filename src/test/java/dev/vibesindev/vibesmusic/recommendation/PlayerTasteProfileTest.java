@@ -347,9 +347,43 @@ public class PlayerTasteProfileTest {
         assertFalse(fresh.isFatigued("track_fatigued", 20, 45 * 60_000L));
 
         // Restore fatigue from SQLite entries
-        PlayerTasteProfile.FatigueEntry entry = new PlayerTasteProfile.FatigueEntry("track_fatigued", "Artist", System.currentTimeMillis());
+        PlayerTasteProfile.FatigueEntry entry = new PlayerTasteProfile.FatigueEntry("track_fatigued", "Artist", "Fatigued Title", System.currentTimeMillis());
         fresh.restoreFatigue(List.of(entry));
 
         assertTrue(fresh.isFatigued("track_fatigued", 20, 45 * 60_000L), "Restored fatigue entry must be recognized");
+    }
+
+    @Test
+    public void testCanonicalTitleMatchingAndRemixDeduplication() {
+        Track original = new Track("id_1", "Neoperreo", "Secret Society, ALIC3E", 210, "url1");
+        Track single2025 = new Track("id_2", "Secret Society - Neoperreo feat. ALIC3E (Single 2025)", "Secret Society", 210, "url2");
+        Track slowed = new Track("id_3", "Neoperreo (Slowed)", "Secret Society", 240, "url3");
+        Track slowedReverb = new Track("id_4", "Neoperreo - Slowed + Reverb", "ALIC3E", 240, "url4");
+        Track differentSong = new Track("id_5", "Another Song", "Secret Society", 180, "url5");
+
+        // Assert isSameSongOrRemix detects all variants as duplicate of original
+        assertTrue(PlayerTasteProfile.isSameSongOrRemix(original, single2025), "Single version should match original");
+        assertTrue(PlayerTasteProfile.isSameSongOrRemix(original, slowed), "Slowed version should match original");
+        assertTrue(PlayerTasteProfile.isSameSongOrRemix(slowed, slowedReverb), "Slowed and Slowed+Reverb should match");
+        assertFalse(PlayerTasteProfile.isSameSongOrRemix(original, differentSong), "Different song must not match");
+
+        // When original is played, any variant with a DIFFERENT trackId MUST be fatigued
+        profile.recordPlay(original);
+
+        assertTrue(profile.isFatigued(slowed, 20, 45 * 60_000L), "Slowed variant must be fatigued by title match");
+        assertTrue(profile.isFatigued(single2025, 20, 45 * 60_000L), "Single variant must be fatigued by title match");
+        assertFalse(profile.isFatigued(differentSong, 20, 45 * 60_000L), "Different song must not be fatigued");
+    }
+
+    @Test
+    public void testSkippedTrackEntersFatigue() {
+        Track trackToSkip = new Track("skip_id", "Annoying Song", "Artist X", 180, "url");
+        assertFalse(profile.isFatigued(trackToSkip, 20, 45 * 60_000L));
+
+        // Skip the track
+        profile.recordSkip(trackToSkip);
+
+        // Skipped track must now be fatigued so autoplay cannot recommend it
+        assertTrue(profile.isFatigued(trackToSkip, 20, 45 * 60_000L), "Skipped track must immediately enter fatigue");
     }
 }

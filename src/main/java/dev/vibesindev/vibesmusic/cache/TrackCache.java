@@ -820,7 +820,7 @@ public final class TrackCache {
         List<dev.vibesindev.vibesmusic.recommendation.PlayerTasteProfile.FatigueEntry> list = new ArrayList<>();
         if (playerUuid == null) return list;
         long cutoff = System.currentTimeMillis() - maxAgeMs;
-        String sql = "SELECT ph.track_id, t.artist, ph.played_at " +
+        String sql = "SELECT ph.track_id, t.artist, t.title, ph.played_at " +
                      "FROM player_history ph JOIN tracks t ON ph.track_id = t.id " +
                      "WHERE ph.player_uuid = ? AND ph.played_at > ? " +
                      "ORDER BY ph.played_at ASC LIMIT ?";
@@ -832,10 +832,12 @@ public final class TrackCache {
                 while (rs.next()) {
                     String trackId = rs.getString("track_id");
                     String artist = rs.getString("artist");
+                    String title = rs.getString("title");
                     long playedAt = rs.getLong("played_at");
                     list.add(new dev.vibesindev.vibesmusic.recommendation.PlayerTasteProfile.FatigueEntry(
                             trackId != null ? trackId : "",
                             artist != null ? artist : "unknown",
+                            title != null ? title : "",
                             playedAt
                     ));
                 }

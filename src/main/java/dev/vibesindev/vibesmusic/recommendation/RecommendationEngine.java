@@ -44,7 +44,7 @@ public final class RecommendationEngine {
      */
     public CompletableFuture<Track> recommendNext(Track seed, PlayerTasteProfile profile) {
         if (seed == null) {
-            return fallbackTrending(profile);
+            return fallbackTrending(seed, profile);
         }
 
         // 1. Gather candidate tracks from all available streams in parallel
@@ -76,7 +76,7 @@ public final class RecommendationEngine {
                 })
                 .thenCompose(candidates -> {
                     if (candidates.isEmpty()) {
-                        return fallbackTrending(profile);
+                        return fallbackTrending(seed, profile);
                     }
 
                     // 2. Score and rank candidates
@@ -84,7 +84,7 @@ public final class RecommendationEngine {
                     if (best != null) {
                         return CompletableFuture.completedFuture(best);
                     }
-                    return fallbackTrending(profile);
+                    return fallbackTrending(seed, profile);
                 });
     }
 
@@ -98,18 +98,33 @@ public final class RecommendationEngine {
     private CompletableFuture<List<RecommendationCandidate>> fetchYouTubeRadioCandidates(Track seed) {
         String ytId = extractYouTubeId(seed);
         if (ytId == null) {
-            // Search YouTube for similar
-            return plugin.ytDlp().searchAndResolve(seed.artist() + " " + seed.title(), seed.durationSeconds())
-                    .thenApply(t -> {
-                        List<RecommendationCandidate> res = new ArrayList<>();
-                        if (t != null) {
-                            res.add(new RecommendationCandidate(
-                                    t, 0.0, RecommendationCandidate.Source.YOUTUBE_RADIO, "YouTube search match", plugin.cache().hasAudio(t.id())
-                            ));
+            // Seed is a non-YouTube track (e.g. Spotify track).
+            // Search YouTube to find the video ID of the seed track so we can query its real Radio Mix
+            return plugin.ytDlp().search(seed.artist() + " " + seed.title())
+                    .thenCompose(resolvedSeed -> {
+                        if (resolvedSeed != null && resolvedSeed.id() != null && !resolvedSeed.id().isBlank()) {
+                            String foundId = extractYouTubeId(resolvedSeed);
+                            if (foundId != null) {
+                                String radioUrl = "https://www.youtube.com/watch?v=" + foundId + "&list=RD" + foundId;
+                                return plugin.ytDlp().resolveRadioMix(radioUrl, Collections.emptySet());
+                            }
                         }
-                        return res;
+                        return CompletableFuture.completedFuture(Collections.<Track>emptyList());
                     })
-                    .exceptionally(err -> new ArrayList<>());
+                    .thenApply(tracks -> {
+                        List<RecommendationCandidate> result = new ArrayList<>();
+                        if (tracks != null) {
+                            for (Track t : tracks) {
+                                if (t != null && !PlayerTasteProfile.isSameSongOrRemix(t, seed)) {
+                                    result.add(new RecommendationCandidate(
+                                            t, 0.0, RecommendationCandidate.Source.YOUTUBE_RADIO, "YouTube RD Neural Cluster", plugin.cache().hasAudio(t.id())
+                                    ));
+                                }
+                            }
+                        }
+                        return result;
+                    })
+                    .exceptionally(err -> Collections.emptyList());
         }
 
         String radioUrl = "https://www.youtube.com/watch?v=" + ytId + "&list=RD" + ytId;
@@ -118,9 +133,11 @@ public final class RecommendationEngine {
                     List<RecommendationCandidate> result = new ArrayList<>();
                     if (tracks != null) {
                         for (Track t : tracks) {
-                            result.add(new RecommendationCandidate(
-                                    t, 0.0, RecommendationCandidate.Source.YOUTUBE_RADIO, "YouTube RD Neural Cluster", plugin.cache().hasAudio(t.id())
-                            ));
+                            if (t != null && !PlayerTasteProfile.isSameSongOrRemix(t, seed)) {
+                                result.add(new RecommendationCandidate(
+                                        t, 0.0, RecommendationCandidate.Source.YOUTUBE_RADIO, "YouTube RD Neural Cluster", plugin.cache().hasAudio(t.id())
+                                ));
+                            }
                         }
                     }
                     return result;
@@ -158,7 +175,7 @@ public final class RecommendationEngine {
         // Stream A: Same artist catalog
         List<Track> sameArtistTracks = plugin.cache().getTracksByArtist(seed.artist(), 3);
         for (Track t : sameArtistTracks) {
-            if (!t.id().equals(seed.id())) {
+            if (t != null && !PlayerTasteProfile.isSameSongOrRemix(t, seed)) {
                 list.add(new RecommendationCandidate(
                         t, 0.0, RecommendationCandidate.Source.SPOTIFY_ARTIST_TOP,
                         "Same artist catalog: " + seed.artist(), plugin.cache().hasAudio(t.id())
@@ -200,14 +217,17 @@ public final class RecommendationEngine {
     /**
      * Fallback: Surfaces trending / frequently played tracks across the server.
      */
-    private CompletableFuture<Track> fallbackTrending(PlayerTasteProfile profile) {
+    private CompletableFuture<Track> fallbackTrending(Track seed, PlayerTasteProfile profile) {
         return CompletableFuture.supplyAsync(() -> {
             List<Track> trending = plugin.cache().getTrendingTracks(10);
             if (trending != null && !trending.isEmpty()) {
                 int cooldownTracks = plugin.getConfig().getInt("recommendations.cooldown-tracks", 20);
                 long cooldownMs = plugin.getConfig().getLong("recommendations.cooldown-minutes", 45) * 60_000L;
                 for (Track t : trending) {
-                    if (profile != null && profile.isFatigued(t.id(), cooldownTracks, cooldownMs)) {
+                    if (seed != null && PlayerTasteProfile.isSameSongOrRemix(t, seed)) {
+                        continue;
+                    }
+                    if (profile != null && profile.isFatigued(t, cooldownTracks, cooldownMs)) {
                         continue;
                     }
                     return t;
@@ -249,6 +269,11 @@ public final class RecommendationEngine {
             if (seenIds.contains(t.id())) continue;
             seenIds.add(t.id());
 
+            // 0. STRICT SEED DUPLICATE FILTER: Never recommend the seed track or its remixes/slowed versions
+            if (seed != null && PlayerTasteProfile.isSameSongOrRemix(t, seed)) {
+                continue;
+            }
+
             // 1. Duration guardrails
             if (t.durationSeconds() > 0) {
                 if (t.durationSeconds() < minDur || t.durationSeconds() > maxDur) {
@@ -256,8 +281,8 @@ public final class RecommendationEngine {
                 }
             }
 
-            // 2. Strict fatigue check (never repeat tracks heard in last 20 songs or 45 min)
-            if (profile != null && profile.isFatigued(t.id(), cooldownTracks, cooldownMs)) {
+            // 2. Strict fatigue check (never repeat tracks or duplicate songs heard in last 20 songs or 45 min)
+            if (profile != null && profile.isFatigued(t, cooldownTracks, cooldownMs)) {
                 continue;
             }
 

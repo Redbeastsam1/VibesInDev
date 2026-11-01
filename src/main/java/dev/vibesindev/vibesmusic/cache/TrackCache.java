@@ -1,0 +1,848 @@
+package dev.vibesindev.vibesmusic.cache;
+
+import dev.vibesindev.vibesmusic.VibesInDevPlugin;
+import dev.vibesindev.vibesmusic.model.Track;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
+import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
+import java.util.Collections;
+import java.util.Map;
+import java.util.Set;
+
+public final class TrackCache {
+
+    public record TasteProfileSnapshot(
+            Map<String, Double> affinities,
+            Map<String, Double> genres,
+            Map<String, Long> dislikes,
+            Map<String, Set<String>> lineage,
+            long lastSync
+    ) {}
+
+    private final Path root;
+    private final Path audio;
+    private final Path raw;
+    private final VibesInDevPlugin plugin;
+    private final String dbUrl;
+    private static final long CLEANUP_COOLDOWN_MS = 5 * 60 * 1000L;
+    private volatile long lastCleanupCheck = 0;
+
+    public TrackCache(VibesInDevPlugin plugin) {
+        this.plugin = plugin;
+
+        root = plugin.getDataFolder()
+                .toPath()
+                .resolve(
+                        plugin.getConfig()
+                                .getString(
+                                        "cache.directory",
+                                        "cache"
+                                )
+                );
+
+        audio = root.resolve("audio");
+
+        raw = root.resolve(
+                plugin.getConfig()
+                        .getString(
+                                "cache.raw-directory",
+                                "raw"
+                        )
+        );
+
+        try {
+            Files.createDirectories(audio);
+            Files.createDirectories(raw);
+        } catch (IOException e) {
+            throw new RuntimeException(
+                    "Could not create cache directories",
+                    e
+            );
+        }
+
+        dbUrl = "jdbc:sqlite:" + root.resolve("metadata.db").toAbsolutePath().toString();
+        initDatabase();
+        validateCache();
+    }
+
+    private void initDatabase() {
+        try {
+            Class.forName("org.sqlite.JDBC");
+        } catch (ClassNotFoundException e) {
+            plugin.getLogger().warning("SQLite JDBC driver not found! Metadata cache might fail.");
+        }
+
+        try (Connection conn = getConnection(); Statement stmt = conn.createStatement()) {
+            stmt.execute("PRAGMA journal_mode = WAL;");
+            stmt.execute("PRAGMA synchronous = NORMAL;");
+            stmt.execute("CREATE TABLE IF NOT EXISTS tracks (" +
+                    "id TEXT PRIMARY KEY, " +
+                    "title TEXT, " +
+                    "artist TEXT, " +
+                    "duration INTEGER, " +
+                    "source TEXT, " +
+                    "last_used INTEGER" +
+                    ")");
+            stmt.execute("CREATE TABLE IF NOT EXISTS player_history (" +
+                    "row_id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                    "player_uuid TEXT NOT NULL, " +
+                    "track_id TEXT NOT NULL, " +
+                    "played_at INTEGER NOT NULL, " +
+                    "liked INTEGER DEFAULT 0, " +
+                    "skipped INTEGER DEFAULT 0, " +
+                    "FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE" +
+                    ")");
+            stmt.execute("CREATE INDEX IF NOT EXISTS idx_player_history_uuid ON player_history(player_uuid, played_at DESC)");
+            stmt.execute("CREATE TABLE IF NOT EXISTS player_taste_profiles (" +
+                    "player_uuid TEXT PRIMARY KEY, " +
+                    "affinities_json TEXT, " +
+                    "genres_json TEXT, " +
+                    "dislikes_json TEXT, " +
+                    "lineage_json TEXT, " +
+                    "last_sync INTEGER" +
+                    ")");
+
+            // Schema migrations for pre-existing tables
+            try {
+                stmt.execute("ALTER TABLE player_history ADD COLUMN liked INTEGER DEFAULT 0;");
+            } catch (SQLException ignored) {}
+            try {
+                stmt.execute("ALTER TABLE player_history ADD COLUMN skipped INTEGER DEFAULT 0;");
+            } catch (SQLException ignored) {}
+        } catch (SQLException e) {
+            plugin.getLogger().severe("Could not initialize TrackCache database: " + e.getMessage());
+        }
+    }
+
+    private Connection getConnection() throws SQLException {
+        return DriverManager.getConnection(dbUrl);
+    }
+
+    private void validateCache() {
+        System.out.println("[VibesInDev] Validating cache database...");
+        int cleaned = 0;
+
+        // 1. Clear raw directory (failed/partial downloads)
+        try {
+            if (Files.isDirectory(raw)) {
+                try (java.util.stream.Stream<Path> rawFiles = Files.list(raw)) {
+                    for (Path rawFile : rawFiles.toList()) {
+                        if (Files.isRegularFile(rawFile)) {
+                            Files.deleteIfExists(rawFile);
+                            cleaned++;
+                        }
+                    }
+                }
+            }
+        } catch (IOException e) {
+            System.err.println("[VibesInDev] Failed to clear raw directory: " + e.getMessage());
+        }
+
+        // 2. Validate audio and DB consistency
+        try {
+            List<String> validIds = new ArrayList<>();
+            
+            if (Files.isDirectory(audio)) {
+                try (java.util.stream.Stream<Path> audioFiles = Files.list(audio)) {
+                    for (Path audioFile : audioFiles.toList()) {
+                        if (!Files.isRegularFile(audioFile)) continue;
+
+                        String fileName = audioFile.getFileName().toString();
+                        if (!fileName.endsWith(".ogg")) continue;
+
+                        String id = fileName.substring(0, fileName.length() - 4);
+
+                        // Corrupt file detection
+                        if (Files.size(audioFile) == 0) {
+                            Files.deleteIfExists(audioFile);
+                            cleaned++;
+                            continue;
+                        }
+                        
+                        validIds.add(id);
+                    }
+                }
+            }
+
+            // Sync database
+            try (Connection conn = getConnection()) {
+                // Delete tracks from DB that have no corresponding audio file
+                List<String> dbIds = new ArrayList<>();
+                try (Statement stmt = conn.createStatement(); ResultSet rs = stmt.executeQuery("SELECT id FROM tracks")) {
+                    while (rs.next()) {
+                        dbIds.add(rs.getString("id"));
+                    }
+                }
+
+                try (PreparedStatement deleteStmt = conn.prepareStatement("DELETE FROM tracks WHERE id = ?")) {
+                    for (String dbId : dbIds) {
+                        if (!validIds.contains(dbId)) {
+                            deleteStmt.setString(1, dbId);
+                            deleteStmt.addBatch();
+                            cleaned++;
+                        }
+                    }
+                    deleteStmt.executeBatch();
+                }
+
+                // Delete audio files that have no DB entry
+                for (String validId : validIds) {
+                    if (!dbIds.contains(validId)) {
+                        Files.deleteIfExists(audio(validId));
+                        cleaned++;
+                    }
+                }
+
+                // Purge corrupted tracks where title = artist from older Spotify regex bugs
+                try (Statement stmt = conn.createStatement();
+                     ResultSet rs = stmt.executeQuery("SELECT id FROM tracks WHERE LOWER(TRIM(title)) = LOWER(TRIM(artist)) AND (source LIKE '%spotify%' OR source LIKE 'spotify%')")) {
+                    List<String> corruptIds = new ArrayList<>();
+                    while (rs.next()) {
+                        corruptIds.add(rs.getString("id"));
+                    }
+                    for (String cId : corruptIds) {
+                        Files.deleteIfExists(audio(cId));
+                        try (PreparedStatement del = conn.prepareStatement("DELETE FROM tracks WHERE id = ?")) {
+                            del.setString(1, cId);
+                            del.executeUpdate();
+                            cleaned++;
+                        }
+                    }
+                    if (!corruptIds.isEmpty()) {
+                        System.out.println("[VibesInDev] Purged " + corruptIds.size() + " corrupted/stale Spotify cache entries.");
+                    }
+                }
+            }
+            
+            // Clean up old .properties files if migrating
+            if (Files.isDirectory(root)) {
+                try (java.util.stream.Stream<Path> oldFiles = Files.list(root)) {
+                    for (Path oldFile : oldFiles.toList()) {
+                        if (Files.isRegularFile(oldFile) && oldFile.getFileName().toString().endsWith(".properties")) {
+                            Files.deleteIfExists(oldFile);
+                            cleaned++;
+                        }
+                    }
+                }
+            }
+
+        } catch (IOException | SQLException e) {
+            System.err.println("[VibesInDev] Failed to validate audio cache: " + e.getMessage());
+        }
+
+        if (cleaned > 0) {
+            System.out.println("[VibesInDev] Cache validation complete. Cleaned " + cleaned + " invalid/partial files.");
+        }
+
+        cleanupOldTracks(null);
+    }
+
+    public Path audioDirectory() {
+        return audio;
+    }
+
+    public Path rawDirectory() {
+        return raw;
+    }
+
+    public Path audio(String id) {
+        return audio.resolve(id + ".ogg");
+    }
+
+    public boolean hasAudio(String id) {
+        if (!plugin.getConfig().getBoolean("cache.enabled", true)) {
+            return false;
+        }
+
+        Path file = audio(id);
+
+        if (!Files.isRegularFile(file)) {
+            return false;
+        }
+
+        try {
+            if (Files.size(file) == 0) {
+                Files.deleteIfExists(file);
+                try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement("DELETE FROM tracks WHERE id = ?")) {
+                    ps.setString(1, id);
+                    ps.executeUpdate();
+                } catch (SQLException ignored) {}
+                return false;
+            }
+        } catch (IOException e) {
+            return false;
+        }
+
+        // Touch the file and DB whenever it is used
+        long now = System.currentTimeMillis();
+        try {
+            Files.setLastModifiedTime(file, FileTime.fromMillis(now));
+        } catch (IOException ignored) {}
+
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement("UPDATE tracks SET last_used = ? WHERE id = ?")) {
+            ps.setLong(1, now);
+            ps.setString(2, id);
+            ps.executeUpdate();
+        } catch (SQLException ignored) {}
+
+        return true;
+    }
+
+    public void writeMetadata(Track track) throws IOException {
+        long now = System.currentTimeMillis();
+        
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(
+                "INSERT INTO tracks (id, title, artist, duration, source, last_used) VALUES (?, ?, ?, ?, ?, ?) " +
+                "ON CONFLICT(id) DO UPDATE SET title=excluded.title, artist=excluded.artist, duration=excluded.duration, source=excluded.source, last_used=excluded.last_used")) {
+            
+            ps.setString(1, track.id());
+            ps.setString(2, track.title());
+            ps.setString(3, track.artist());
+            ps.setLong(4, track.durationSeconds());
+            ps.setString(5, track.sourceUrl());
+            ps.setLong(6, now);
+            ps.executeUpdate();
+            
+        } catch (SQLException e) {
+            throw new IOException("Failed to write metadata to database", e);
+        }
+
+        Path audioFile = audio(track.id());
+        if (Files.isRegularFile(audioFile)) {
+            try {
+                Files.setLastModifiedTime(audioFile, FileTime.fromMillis(now));
+            } catch (IOException ignored) {}
+        }
+
+        java.util.concurrent.CompletableFuture.runAsync(() -> cleanupOldTracks(track.id()));
+    }
+
+    public void cleanupOldTracks(String protectedId) {
+        if (!plugin.getConfig().getBoolean("cache.cleanup-enabled", true)) {
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        if (protectedId != null && (now - lastCleanupCheck < CLEANUP_COOLDOWN_MS)) {
+            return;
+        }
+        lastCleanupCheck = now;
+
+        try {
+            if (!Files.isDirectory(audio)) {
+                return;
+            }
+
+            long totalSizeBytes = 0;
+            try (java.util.stream.Stream<Path> audioFiles = Files.list(audio)) {
+                for (Path audioFile : audioFiles.filter(Files::isRegularFile).filter(p -> p.getFileName().toString().endsWith(".ogg")).toList()) {
+                    totalSizeBytes += Files.size(audioFile);
+                }
+            }
+
+            double maxGb = plugin.getConfig().getDouble("cache.max-size-gb", 20.0);
+            long maxBytes = (long) (maxGb * 1024 * 1024 * 1024);
+
+            if (totalSizeBytes <= maxBytes) {
+                return;
+            }
+
+            try (Connection conn = getConnection();
+                 Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery("SELECT id FROM tracks ORDER BY last_used ASC")) {
+                
+                while (rs.next() && totalSizeBytes > maxBytes) {
+                    String id = rs.getString("id");
+
+                    if (id.equals(protectedId)) {
+                        continue;
+                    }
+
+                    Path audioFile = audio(id);
+                    if (Files.isRegularFile(audioFile)) {
+                        long size = Files.size(audioFile);
+                        Files.deleteIfExists(audioFile);
+                        totalSizeBytes -= size;
+                        System.out.println("[VibesInDev] Removed old cached track to save space: " + id);
+                    }
+                    
+                    try (PreparedStatement deletePs = conn.prepareStatement("DELETE FROM tracks WHERE id = ?")) {
+                        deletePs.setString(1, id);
+                        deletePs.executeUpdate();
+                    }
+                }
+            }
+
+        } catch (IOException | SQLException e) {
+            System.err.println("[VibesInDev] Could not clean music cache: " + e.getMessage());
+        }
+    }
+
+    public void deleteRawFile(Path file) {
+        if (file == null) {
+            return;
+        }
+        try {
+            Files.deleteIfExists(file);
+        } catch (IOException e) {
+            System.err.println(
+                    "[VibesInDev] Could not delete temporary raw audio: " + file.getFileName().toString() + " — " + e.getMessage()
+            );
+        }
+    }
+
+
+    // =======================================================
+    // PLAYER HISTORY (persisted)
+    // =======================================================
+
+    /**
+     * Persists one history entry.  The in-memory deque is still
+     * the authority for the current session; this just survives restarts.
+     */
+    public void persistHistory(java.util.UUID playerUuid, Track track) {
+        if (track == null || playerUuid == null) return;
+
+        // Ensure the track exists in the tracks table first
+        try {
+            Track existing = readMetadata(track.id());
+            if (existing == null) {
+                writeMetadataSilent(track);
+            }
+        } catch (java.io.IOException ignored) {}
+
+        int historyLimit = plugin.getConfig().getInt("playback.history-limit", 50);
+
+        try (Connection conn = getConnection()) {
+            conn.setAutoCommit(false);
+            try {
+                // Insert the new row
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "INSERT INTO player_history (player_uuid, track_id, played_at) VALUES (?, ?, ?)")) {
+                    ps.setString(1, playerUuid.toString());
+                    ps.setString(2, track.id());
+                    ps.setLong(3, System.currentTimeMillis());
+                    ps.executeUpdate();
+                }
+
+                // Trim to historyLimit (delete oldest beyond the cap)
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "DELETE FROM player_history WHERE player_uuid = ? AND row_id NOT IN (" +
+                        "  SELECT row_id FROM player_history WHERE player_uuid = ?" +
+                        "  ORDER BY played_at DESC LIMIT ?" +
+                        ")")) {
+                    ps.setString(1, playerUuid.toString());
+                    ps.setString(2, playerUuid.toString());
+                    ps.setInt(3, historyLimit);
+                    ps.executeUpdate();
+                }
+
+                conn.commit();
+            } catch (SQLException e) {
+                conn.rollback();
+                throw e;
+            } finally {
+                conn.setAutoCommit(true);
+            }
+        } catch (SQLException e) {
+            plugin.getLogger().warning("[VibesInDev] Could not persist history: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Loads the persisted history for a player, newest first.
+     */
+
+    /**
+     * Records or updates whether a player liked a track in their listening history.
+     */
+    public void recordTrackLiked(UUID playerUuid, String trackId, boolean liked) {
+        if (playerUuid == null || trackId == null) return;
+        String sql = "UPDATE player_history SET liked = ? WHERE row_id = (" +
+                "  SELECT row_id FROM player_history WHERE player_uuid = ? AND track_id = ? ORDER BY played_at DESC LIMIT 1" +
+                ")";
+        try (Connection conn = getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, liked ? 1 : 0);
+            ps.setString(2, playerUuid.toString());
+            ps.setString(3, trackId);
+            int rows = ps.executeUpdate();
+            if (rows == 0 && liked) {
+                // Not found in recent history - insert fresh record
+                try (PreparedStatement insertPs = conn.prepareStatement(
+                        "INSERT INTO player_history (player_uuid, track_id, played_at, liked, skipped) VALUES (?, ?, ?, 1, 0)")) {
+                    insertPs.setString(1, playerUuid.toString());
+                    insertPs.setString(2, trackId);
+                    insertPs.setLong(3, System.currentTimeMillis());
+                    insertPs.executeUpdate();
+                }
+            }
+        } catch (SQLException e) {
+            plugin.getLogger().warning("[VibesInDev] Could not record track like: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Records that a track was skipped early by a player.
+     */
+    public void recordTrackSkipped(UUID playerUuid, String trackId) {
+        if (playerUuid == null || trackId == null) return;
+        String sql = "UPDATE player_history SET skipped = 1 WHERE row_id = (" +
+                "  SELECT row_id FROM player_history WHERE player_uuid = ? AND track_id = ? ORDER BY played_at DESC LIMIT 1" +
+                ")";
+        try (Connection conn = getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, playerUuid.toString());
+            ps.setString(2, trackId);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            plugin.getLogger().warning("[VibesInDev] Could not record track skip: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Checks if a player has marked this track as liked.
+     */
+    public boolean isTrackLiked(UUID playerUuid, String trackId) {
+        if (playerUuid == null || trackId == null) return false;
+        String sql = "SELECT liked FROM player_history WHERE player_uuid = ? AND track_id = ? AND liked = 1 LIMIT 1";
+        try (Connection conn = getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, playerUuid.toString());
+            ps.setString(2, trackId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        } catch (SQLException e) {
+            return false;
+        }
+    }
+
+    public java.util.List<Track> loadHistory(java.util.UUID playerUuid) {
+        java.util.List<Track> result = new java.util.ArrayList<>();
+        String sql =
+                "SELECT t.id, t.title, t.artist, t.duration, t.source " +
+                "FROM player_history ph JOIN tracks t ON ph.track_id = t.id " +
+                "WHERE ph.player_uuid = ? ORDER BY ph.played_at DESC";
+        try (Connection conn = getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, playerUuid.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    result.add(new Track(
+                            rs.getString("id"),
+                            rs.getString("title"),
+                            rs.getString("artist"),
+                            rs.getLong("duration"),
+                            rs.getString("source")
+                    ));
+                }
+            }
+        } catch (SQLException e) {
+            plugin.getLogger().warning("[VibesInDev] Could not load history: " + e.getMessage());
+        }
+        return result;
+    }
+
+    /**
+     * Clears all persisted history for a player.
+     */
+    public void clearPlayerHistory(java.util.UUID playerUuid) {
+        try (Connection conn = getConnection();
+             PreparedStatement ps = conn.prepareStatement(
+                     "DELETE FROM player_history WHERE player_uuid = ?")) {
+            ps.setString(1, playerUuid.toString());
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            plugin.getLogger().warning("[VibesInDev] Could not clear history: " + e.getMessage());
+        }
+    }
+
+    /** Write metadata without throwing - used when ensuring history track exists. */
+    private void writeMetadataSilent(Track track) {
+        try { writeMetadata(track); } catch (java.io.IOException ignored) {}
+    }
+    public void invalidate(String id) {
+        if (id == null || id.isBlank()) return;
+        try {
+            Files.deleteIfExists(audio(id));
+            try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement("DELETE FROM tracks WHERE id = ?")) {
+                ps.setString(1, id);
+                ps.executeUpdate();
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    public Track readMetadataQuietly(String id) {
+        if (id == null || id.isBlank()) return null;
+        try {
+            return readMetadata(id);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    public Track readMetadata(String id) throws IOException {
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement("SELECT * FROM tracks WHERE id = ?")) {
+            ps.setString(1, id);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return new Track(
+                            rs.getString("id"),
+                            rs.getString("title"),
+                            rs.getString("artist"),
+                            rs.getLong("duration"),
+                            rs.getString("source")
+                    );
+                }
+            }
+        } catch (SQLException e) {
+            throw new IOException("Failed to read metadata from database", e);
+        }
+        return null;
+    }
+
+    // =======================================================
+    // RECOMMENDATION & COLLABORATIVE FILTERING QUERIES
+    // =======================================================
+
+    /**
+     * Returns the player's most listened artists with play counts from SQLite history.
+     */
+    public java.util.Map<String, Integer> getTopArtistsForPlayer(java.util.UUID playerUuid, int limit) {
+        java.util.Map<String, Integer> result = new java.util.LinkedHashMap<>();
+        String sql = "SELECT t.artist, COUNT(*) as play_count " +
+                     "FROM player_history ph JOIN tracks t ON ph.track_id = t.id " +
+                     "WHERE ph.player_uuid = ? " +
+                     "GROUP BY t.artist " +
+                     "ORDER BY play_count DESC " +
+                     "LIMIT ?";
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, playerUuid.toString());
+            ps.setInt(2, limit);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String artist = rs.getString("artist");
+                    if (artist != null && !artist.isBlank() && !artist.equalsIgnoreCase("unknown")) {
+                        result.put(artist, rs.getInt("play_count"));
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            plugin.getLogger().warning("[VibesInDev] Error querying top artists: " + e.getMessage());
+        }
+        return result;
+    }
+
+    /**
+     * Collaborative filtering query: "Players who played Artist X also played Artist Y".
+     */
+    public java.util.List<String> getCoPlayedArtists(String seedArtist, int limit) {
+        java.util.List<String> result = new java.util.ArrayList<>();
+        if (seedArtist == null || seedArtist.isBlank()) return result;
+
+        String sql = "SELECT t2.artist, COUNT(*) as coplay_count " +
+                     "FROM player_history ph1 " +
+                     "JOIN player_history ph2 ON ph1.player_uuid = ph2.player_uuid " +
+                     "JOIN tracks t1 ON ph1.track_id = t1.id " +
+                     "JOIN tracks t2 ON ph2.track_id = t2.id " +
+                     "WHERE LOWER(TRIM(t1.artist)) = LOWER(TRIM(?)) AND LOWER(TRIM(t2.artist)) != LOWER(TRIM(?)) " +
+                     "GROUP BY t2.artist " +
+                     "ORDER BY coplay_count DESC " +
+                     "LIMIT ?";
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, seedArtist);
+            ps.setString(2, seedArtist);
+            ps.setInt(3, limit);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String artist = rs.getString("artist");
+                    if (artist != null && !artist.isBlank() && !artist.equalsIgnoreCase("unknown")) {
+                        result.add(artist);
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            plugin.getLogger().warning("[VibesInDev] Error querying co-played artists: " + e.getMessage());
+        }
+        return result;
+    }
+
+    /**
+     * Surfaces cached tracks by a given artist.
+     */
+    public java.util.List<Track> getTracksByArtist(String artist, int limit) {
+        java.util.List<Track> result = new java.util.ArrayList<>();
+        if (artist == null || artist.isBlank()) return result;
+
+        String sql = "SELECT id, title, artist, duration, source " +
+                     "FROM tracks " +
+                     "WHERE LOWER(TRIM(artist)) = LOWER(TRIM(?)) " +
+                     "ORDER BY last_used DESC " +
+                     "LIMIT ?";
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, artist);
+            ps.setInt(2, limit);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    result.add(new Track(
+                            rs.getString("id"),
+                            rs.getString("title"),
+                            rs.getString("artist"),
+                            rs.getLong("duration"),
+                            rs.getString("source")
+                    ));
+                }
+            }
+        } catch (SQLException e) {
+            plugin.getLogger().warning("[VibesInDev] Error querying tracks by artist: " + e.getMessage());
+        }
+        return result;
+    }
+
+    /**
+     * Surfaces the most popular tracks across the entire server.
+     */
+    public java.util.List<Track> getTrendingTracks(int limit) {
+        java.util.List<Track> result = new java.util.ArrayList<>();
+        String sql = "SELECT t.id, t.title, t.artist, t.duration, t.source, COUNT(ph.row_id) as total_plays " +
+                     "FROM tracks t " +
+                     "LEFT JOIN player_history ph ON t.id = ph.track_id " +
+                     "GROUP BY t.id " +
+                     "ORDER BY total_plays DESC, t.last_used DESC " +
+                     "LIMIT ?";
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, limit);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    result.add(new Track(
+                            rs.getString("id"),
+                            rs.getString("title"),
+                            rs.getString("artist"),
+                            rs.getLong("duration"),
+                            rs.getString("source")
+                    ));
+                }
+            }
+        } catch (SQLException e) {
+            plugin.getLogger().warning("[VibesInDev] Error querying trending tracks: " + e.getMessage());
+        }
+        return result;
+    }
+
+    // =======================================================
+    // TASTE PROFILE PERSISTENCE
+    // =======================================================
+
+    public void saveTasteProfile(
+            UUID playerUuid,
+            String affinitiesJson,
+            String genresJson,
+            String dislikesJson,
+            String lineageJson,
+            long lastSync
+    ) {
+        if (playerUuid == null) return;
+        String sql = "INSERT INTO player_taste_profiles (player_uuid, affinities_json, genres_json, dislikes_json, lineage_json, last_sync) " +
+                     "VALUES (?, ?, ?, ?, ?, ?) " +
+                     "ON CONFLICT(player_uuid) DO UPDATE SET " +
+                     "affinities_json = excluded.affinities_json, " +
+                     "genres_json = excluded.genres_json, " +
+                     "dislikes_json = excluded.dislikes_json, " +
+                     "lineage_json = excluded.lineage_json, " +
+                     "last_sync = excluded.last_sync;";
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, playerUuid.toString());
+            ps.setString(2, affinitiesJson != null ? affinitiesJson : "{}");
+            ps.setString(3, genresJson != null ? genresJson : "{}");
+            ps.setString(4, dislikesJson != null ? dislikesJson : "{}");
+            ps.setString(5, lineageJson != null ? lineageJson : "{}");
+            ps.setLong(6, lastSync);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            plugin.getLogger().warning("[VibesInDev] Error saving player taste profile to SQLite: " + e.getMessage());
+        }
+    }
+
+    public TasteProfileSnapshot loadTasteProfile(UUID playerUuid) {
+        if (playerUuid == null) return null;
+        String sql = "SELECT affinities_json, genres_json, dislikes_json, lineage_json, last_sync FROM player_taste_profiles WHERE player_uuid = ?";
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, playerUuid.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    String affJson = rs.getString("affinities_json");
+                    String genJson = rs.getString("genres_json");
+                    String disJson = rs.getString("dislikes_json");
+                    String linJson = rs.getString("lineage_json");
+                    long lastSync = rs.getLong("last_sync");
+
+                    Gson gson = new Gson();
+                    java.lang.reflect.Type mapDouble = new TypeToken<Map<String, Double>>(){}.getType();
+                    java.lang.reflect.Type mapLong = new TypeToken<Map<String, Long>>(){}.getType();
+                    java.lang.reflect.Type mapSet = new TypeToken<Map<String, Set<String>>>(){}.getType();
+
+                    Map<String, Double> affinities = affJson != null && !affJson.isBlank() ? gson.fromJson(affJson, mapDouble) : Collections.emptyMap();
+                    Map<String, Double> genres = genJson != null && !genJson.isBlank() ? gson.fromJson(genJson, mapDouble) : Collections.emptyMap();
+                    Map<String, Long> dislikes = disJson != null && !disJson.isBlank() ? gson.fromJson(disJson, mapLong) : Collections.emptyMap();
+                    Map<String, Set<String>> lineage = linJson != null && !linJson.isBlank() ? gson.fromJson(linJson, mapSet) : Collections.emptyMap();
+
+                    return new TasteProfileSnapshot(
+                            affinities != null ? affinities : Collections.emptyMap(),
+                            genres != null ? genres : Collections.emptyMap(),
+                            dislikes != null ? dislikes : Collections.emptyMap(),
+                            lineage != null ? lineage : Collections.emptyMap(),
+                            lastSync
+                    );
+                }
+            }
+        } catch (Exception e) {
+            plugin.getLogger().warning("[VibesInDev] Error loading player taste profile from SQLite: " + e.getMessage());
+        }
+        return null;
+    }
+
+    public List<dev.vibesindev.vibesmusic.recommendation.PlayerTasteProfile.FatigueEntry> getRecentFatigueHistory(UUID playerUuid, int limit, long maxAgeMs) {
+        List<dev.vibesindev.vibesmusic.recommendation.PlayerTasteProfile.FatigueEntry> list = new ArrayList<>();
+        if (playerUuid == null) return list;
+        long cutoff = System.currentTimeMillis() - maxAgeMs;
+        String sql = "SELECT ph.track_id, t.artist, ph.played_at " +
+                     "FROM player_history ph JOIN tracks t ON ph.track_id = t.id " +
+                     "WHERE ph.player_uuid = ? AND ph.played_at > ? " +
+                     "ORDER BY ph.played_at ASC LIMIT ?";
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, playerUuid.toString());
+            ps.setLong(2, cutoff);
+            ps.setInt(3, limit);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String trackId = rs.getString("track_id");
+                    String artist = rs.getString("artist");
+                    long playedAt = rs.getLong("played_at");
+                    list.add(new dev.vibesindev.vibesmusic.recommendation.PlayerTasteProfile.FatigueEntry(
+                            trackId != null ? trackId : "",
+                            artist != null ? artist : "unknown",
+                            playedAt
+                    ));
+                }
+            }
+        } catch (SQLException e) {
+            plugin.getLogger().warning("[VibesInDev] Error loading fatigue history: " + e.getMessage());
+        }
+        return list;
+    }
+}

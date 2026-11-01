@@ -106,6 +106,15 @@ public final class MusicPlaybackManager {
                     Track next = party.peekNext();
                     if (next != null && !plugin.cache().hasAudio(next.id()) && !activePreparations.containsKey(next.id())) {
                         prepareTrack(next);
+                    } else if (next == null && plugin.recommendations() != null
+                            && plugin.recommendations().isPartyAutoplayEnabled(party.getPartyId())) {
+                        plugin.recommendations().getOrPredictNext(party.getOwner(), party.getCurrentTrack())
+                                .thenAccept(predicted -> {
+                                    if (predicted != null && !plugin.cache().hasAudio(predicted.id())
+                                            && !activePreparations.containsKey(predicted.id())) {
+                                        prepareTrack(predicted);
+                                    }
+                                });
                     }
                 }
             }
@@ -118,9 +127,36 @@ public final class MusicPlaybackManager {
                 if (plugin.network().isPlaying(player) && !plugin.network().isPaused(player)) {
                     Track current = plugin.queues().current(uuid);
                     if (current != null) {
-                        Track next = plugin.queues().peekNext(uuid, current, true);
-                        if (next != null && !plugin.cache().hasAudio(next.id()) && !activePreparations.containsKey(next.id())) {
-                            prepareTrack(next);
+                        // Position-aware preload: only preload when within the last 15% of the
+                        // track's duration (or last 30 seconds, whichever is larger) to avoid
+                        // wasting bandwidth by preloading at the very start of a long track.
+                        PlaybackSession session = getSession(uuid);
+                        boolean shouldPreload = true;
+                        if (session != null && current.durationSeconds() > 0) {
+                            long remainingMs = (current.durationSeconds() * 1000L)
+                                    - session.getPositionMs();
+                            long thresholdMs = Math.max(
+                                    30_000L,
+                                    (long) (current.durationSeconds() * 1000L * 0.15)
+                            );
+                            shouldPreload = remainingMs <= thresholdMs;
+                        }
+
+                        if (shouldPreload) {
+                            Track next = plugin.queues().peekNext(uuid, current, true);
+                            if (next != null && !plugin.cache().hasAudio(next.id())
+                                    && !activePreparations.containsKey(next.id())) {
+                                prepareTrack(next);
+                            } else if (next == null && plugin.recommendations() != null
+                                    && plugin.recommendations().isAutoplayEnabled(uuid)) {
+                                plugin.recommendations().getOrPredictNext(uuid, current)
+                                        .thenAccept(predicted -> {
+                                            if (predicted != null && !plugin.cache().hasAudio(predicted.id())
+                                                    && !activePreparations.containsKey(predicted.id())) {
+                                                prepareTrack(predicted);
+                                            }
+                                        });
+                            }
                         }
                     }
                 }
@@ -401,11 +437,18 @@ public final class MusicPlaybackManager {
 
         UUID uuid = player.getUniqueId();
 
-        Track current =
-                plugin.queues().current(uuid);
+        Track current = plugin.queues().current(uuid);
 
-        Track next =
-                plugin.queues().advance(uuid, current, false);
+        // Record skip penalty if skipped within first 30 seconds
+        PlaybackSession curSession = getSession(uuid);
+        if (current != null && curSession != null && curSession.getPositionMs() < 30_000L) {
+            plugin.cache().recordTrackSkipped(uuid, current.id());
+            if (plugin.recommendations() != null) {
+                plugin.recommendations().recordSkip(uuid, current);
+            }
+        }
+
+        Track next = plugin.queues().advance(uuid, current, false);
 
         if (current != null) {
             plugin.queues().addHistory(
@@ -415,6 +458,36 @@ public final class MusicPlaybackManager {
         }
 
         if (next == null) {
+            if (plugin.recommendations() != null
+                    && plugin.recommendations().isAutoplayEnabled(uuid)
+                    && current != null) {
+                stopCurrentOnly(player);
+                player.sendMessage(ChatColor.LIGHT_PURPLE + "♫ Autoplay: Finding next recommended track...");
+                plugin.recommendations().getOrPredictNext(uuid, current)
+                        .thenAccept(recommended -> {
+                            if (recommended != null) {
+                                plugin.getServer().getScheduler().runTask(plugin, () -> {
+                                    if (player.isOnline()) {
+                                        plugin.recommendations().sendAutoplayNotification(player, recommended);
+                                        startTrack(player, recommended, true);
+                                    }
+                                });
+                            } else {
+                                plugin.getServer().getScheduler().runTask(plugin, () -> {
+                                    plugin.queues().setCurrent(uuid, null);
+                                    player.sendMessage(ChatColor.YELLOW + "There is no next track.");
+                                });
+                            }
+                        })
+                        .exceptionally(err -> {
+                            plugin.getServer().getScheduler().runTask(plugin, () -> {
+                                plugin.queues().setCurrent(uuid, null);
+                                player.sendMessage(ChatColor.YELLOW + "There is no next track.");
+                            });
+                            return null;
+                        });
+                return;
+            }
 
             stopCurrentOnly(player);
 
@@ -608,6 +681,40 @@ public final class MusicPlaybackManager {
                 plugin.queues().advance(uuid, track, true);
 
         if (next == null) {
+            // Autoplay: if enabled, ask the RecommendationManager for the next track
+            if (plugin.recommendations() != null
+                    && plugin.recommendations().isAutoplayEnabled(uuid)) {
+                plugin.recommendations()
+                        .getOrPredictNext(uuid, track)
+                        .thenAccept(recommended -> {
+                            if (recommended != null) {
+                                plugin.getServer().getScheduler().runTask(plugin, () -> {
+                                    // Re-check the player is still online
+                                    if (player.isOnline()
+                                            && !plugin.network().isPlaying(player)) {
+                                        plugin.recommendations()
+                                                .sendAutoplayNotification(player, recommended);
+                                        startTrack(player, recommended, true);
+                                    }
+                                });
+                            } else {
+                                plugin.getServer().getScheduler().runTask(plugin, () ->
+                                        plugin.queues().setCurrent(uuid, null)
+                                );
+                            }
+                        })
+                        .exceptionally(err -> {
+                            plugin.getLogger().warning(
+                                    "[VibesInDev] Autoplay recommendation failed for "
+                                            + player.getName() + ": " + err.getMessage()
+                            );
+                            plugin.getServer().getScheduler().runTask(plugin, () ->
+                                    plugin.queues().setCurrent(uuid, null)
+                            );
+                            return null;
+                        });
+                return; // Don't clear current yet — wait for async recommendation
+            }
 
             plugin.queues().setCurrent(
                     uuid,
@@ -1098,6 +1205,45 @@ public final class MusicPlaybackManager {
         Track next = party.dequeue();
 
         if (next == null) {
+            if (plugin.recommendations() != null
+                    && plugin.recommendations().isPartyAutoplayEnabled(party.getPartyId())
+                    && current != null) {
+                stopPartyStreams(party);
+                broadcastToPartyAll(party, ChatColor.LIGHT_PURPLE + "♫ Party Autoplay: Finding next recommended track...");
+                plugin.recommendations().getOrPredictNext(party.getOwner(), current)
+                        .thenAccept(recommended -> {
+                            if (recommended != null) {
+                                plugin.getServer().getScheduler().runTask(plugin, () -> {
+                                    Player currentOwner = plugin.getServer().getPlayer(party.getOwner());
+                                    if (currentOwner != null && currentOwner.isOnline()) {
+                                        broadcastToPartyAll(party,
+                                                ChatColor.LIGHT_PURPLE + "♫ Party Autoplay: "
+                                                        + ChatColor.WHITE + recommended.title()
+                                                        + ChatColor.GRAY + " by "
+                                                        + ChatColor.WHITE + recommended.artist()
+                                                        + ChatColor.DARK_GRAY + " (Recommended)");
+                                        startPartyTrack(currentOwner, party, recommended);
+                                    } else {
+                                        stopPartyPlayback(party);
+                                    }
+                                });
+                            } else {
+                                plugin.getServer().getScheduler().runTask(plugin, () -> {
+                                    stopPartyPlayback(party);
+                                    player.sendMessage(ChatColor.YELLOW + "There is no next party track.");
+                                });
+                            }
+                        })
+                        .exceptionally(err -> {
+                            plugin.getServer().getScheduler().runTask(plugin, () -> {
+                                stopPartyPlayback(party);
+                                player.sendMessage(ChatColor.YELLOW + "There is no next party track.");
+                            });
+                            return null;
+                        });
+                return;
+            }
+
             stopPartyPlayback(party);
 
             player.sendMessage(
@@ -1415,6 +1561,50 @@ public final class MusicPlaybackManager {
         }
 
         if (next == null) {
+            if (plugin.recommendations() != null
+                    && plugin.recommendations().isPartyAutoplayEnabled(party.getPartyId())) {
+                Player partyOwner = plugin.getServer().getPlayer(party.getOwner());
+                if (partyOwner != null && partyOwner.isOnline()) {
+                    plugin.recommendations()
+                            .getOrPredictNext(party.getOwner(), track)
+                            .thenAccept(recommended -> {
+                                if (recommended != null) {
+                                    plugin.getServer().getScheduler().runTask(plugin, () -> {
+                                        Player currentOwner = plugin.getServer().getPlayer(party.getOwner());
+                                        if (currentOwner != null && currentOwner.isOnline()) {
+                                            broadcastToPartyAll(party,
+                                                    ChatColor.LIGHT_PURPLE + "♫ Party Autoplay: "
+                                                            + ChatColor.WHITE + recommended.title()
+                                                            + ChatColor.GRAY + " by "
+                                                            + ChatColor.WHITE + recommended.artist()
+                                                            + ChatColor.DARK_GRAY + " (Recommended)");
+                                            startPartyTrack(currentOwner, party, recommended);
+                                        } else {
+                                            party.setCurrentTrack(null);
+                                            party.setPaused(false);
+                                        }
+                                    });
+                                } else {
+                                    plugin.getServer().getScheduler().runTask(plugin, () -> {
+                                        party.setCurrentTrack(null);
+                                        party.setPaused(false);
+                                    });
+                                }
+                            })
+                            .exceptionally(err -> {
+                                plugin.getLogger().warning(
+                                        "[VibesInDev] Party autoplay failed: " + err.getMessage()
+                                );
+                                plugin.getServer().getScheduler().runTask(plugin, () -> {
+                                    party.setCurrentTrack(null);
+                                    party.setPaused(false);
+                                });
+                                return null;
+                            });
+                    return;
+                }
+            }
+
             party.setCurrentTrack(null);
             party.setPaused(false);
             return;

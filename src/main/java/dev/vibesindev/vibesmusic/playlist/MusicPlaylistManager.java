@@ -7,7 +7,13 @@ import org.bukkit.configuration.file.YamlConfiguration;
 
 import java.io.File;
 import java.io.IOException;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class MusicPlaylistManager {
@@ -119,6 +125,11 @@ public final class MusicPlaylistManager {
         Map<String, CustomPlaylist> userMap = playlists.computeIfAbsent(player, k -> new ConcurrentHashMap<>());
         String key = name.toLowerCase(Locale.ROOT).trim();
         userMap.put(key, new CustomPlaylist(name.trim(), System.currentTimeMillis(), new ArrayList<>(tracks)));
+        if (plugin.recommendations() != null) {
+            for (Track t : tracks) {
+                plugin.recommendations().recordPlaylistAdd(player, t);
+            }
+        }
         plugin.getServer().getScheduler().runTaskAsynchronously(plugin, this::save);
         return true;
     }

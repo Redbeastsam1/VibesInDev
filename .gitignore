@@ -1,4 +1,4 @@
-﻿# Compiled class files & Bytecode
+# Compiled class files & Bytecode
 *.class
 
 # Log files
@@ -64,8 +64,8 @@ Thumbs.db
 desktop.ini
 
 # Audio Cache & Working Directories
-cache/
-raw/
+/cache/
+/raw/
 *.tmp
 *.bak
 

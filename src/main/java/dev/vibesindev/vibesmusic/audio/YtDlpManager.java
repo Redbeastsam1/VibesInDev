@@ -263,6 +263,80 @@ public final class YtDlpManager {
         }, resolutionExecutor);
     }
 
+
+    /**
+     * Resolves a YouTube Radio Mix playlist (RD{id}) to a list of candidate tracks.
+     *
+     * <p>Uses {@code --flat-playlist} so this is fast (~2 seconds) — it only fetches
+     * metadata, not audio. Returns tracks 2 through 8 (skips item 1 which is the seed
+     * itself). Items already in {@code recentIds} are included in the list so that the
+     * caller can decide how many to skip.
+     *
+     * @param radioUrl  full YouTube Radio Mix URL: {@code https://www.youtube.com/watch?v={id}&list=RD{id}}
+     * @param recentIds IDs of recently played tracks (used for ordering, not filtering here)
+     * @return future resolving to an ordered list of candidate {@link Track} objects
+     */
+    public CompletableFuture<List<Track>> resolveRadioMix(
+            String radioUrl,
+            java.util.Set<String> recentIds
+    ) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                String printFormat = "%(id)s\t%(title)s\t%(uploader)s\t%(duration)s\t%(webpage_url)s";
+
+                List<String> args = baseArgs();
+                args.add("--flat-playlist");
+                args.add("--playlist-items");
+                args.add("2-8"); // skip item 1 (the seed track itself)
+                args.add("--print");
+                args.add(printFormat);
+                args.add(radioUrl);
+
+                ProcessRunner.Result result = ProcessRunner.run(args, timeout);
+
+                if (result.exitCode() != 0) {
+                    throw new IllegalStateException(
+                            "yt-dlp radio mix failed: " + cleanError(result)
+                    );
+                }
+
+                List<Track> tracks = new ArrayList<>();
+
+                for (String line : result.stdout().split("\\R")) {
+                    if (line.isBlank()) continue;
+
+                    String[] parts = line.split("\t", 5);
+                    if (parts.length < 4) continue;
+
+                    String id          = parts[0].trim();
+                    String title       = parts[1].trim();
+                    String uploader    = parts[2].trim();
+                    String durationStr = parts[3].trim();
+                    String url         = parts.length >= 5 ? parts[4].trim() : "";
+
+                    if (id.isBlank() || id.equalsIgnoreCase("NA") || id.equalsIgnoreCase("none")) {
+                        continue;
+                    }
+                    if (title.isBlank() || title.equalsIgnoreCase("NA")) title = id;
+                    if (uploader.isBlank() || uploader.equalsIgnoreCase("NA")) uploader = "Unknown";
+                    if (url.isBlank() || url.equalsIgnoreCase("NA")) {
+                        url = "https://www.youtube.com/watch?v=" + id;
+                    }
+
+                    long duration = parseDuration(durationStr);
+
+                    // Do NOT enforce duration check here; the scorer/filter will handle it
+                    tracks.add(new Track(id, title, uploader, duration, url));
+                }
+
+                return tracks;
+
+            } catch (IOException | InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("Could not resolve YouTube radio mix", e);
+            }
+        }, resolutionExecutor);
+    }
     public CompletableFuture<Track> searchAndResolve(String query) {
         return searchAndResolve(query, -1);
     }

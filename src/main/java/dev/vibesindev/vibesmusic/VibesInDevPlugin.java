@@ -11,6 +11,7 @@ import dev.vibesindev.vibesmusic.playback.MusicPlaybackManager;
 import dev.vibesindev.vibesmusic.queue.MusicQueueManager;
 import dev.vibesindev.vibesmusic.source.MusicSourceManager;
 import dev.vibesindev.vibesmusic.spotify.SpotifyClient;
+import dev.vibesindev.vibesmusic.spotify.SpotifyAuthBookListener;
 import dev.vibesindev.vibesmusic.party.MusicPartyManager;
 import dev.vibesindev.vibesmusic.gui.PartyInfoMenu;
 import dev.vibesindev.vibesmusic.gui.MusicMenu;
@@ -20,6 +21,7 @@ import dev.vibesindev.vibesmusic.gui.PlaylistsMenu;
 import dev.vibesindev.vibesmusic.gui.HistoryMenu;
 import dev.vibesindev.vibesmusic.party.MusicPartyListener;
 import dev.vibesindev.vibesmusic.metrics.MetricsManager;
+import dev.vibesindev.vibesmusic.recommendation.RecommendationManager;
 import org.bukkit.plugin.java.JavaPlugin;
 
 public final class VibesInDevPlugin
@@ -43,6 +45,7 @@ public final class VibesInDevPlugin
     private PlaylistsMenu playlistsMenu;
     private MusicPlaylistManager playlists;
     private MetricsManager metrics;
+    private RecommendationManager recommendations;
     private HistoryMenu historyMenu;
 
     @Override
@@ -96,6 +99,7 @@ public final class VibesInDevPlugin
                             this,
                             ytDlp
                     );
+            getServer().getPluginManager().registerEvents(new SpotifyAuthBookListener(this), this);
         }
 
         sources =
@@ -113,6 +117,8 @@ public final class VibesInDevPlugin
          */
         playback =
                 new MusicPlaybackManager(this);
+
+        recommendations = new RecommendationManager(this);
 
         network.setPlaybackManager(
                 playback
@@ -183,6 +189,14 @@ public final class VibesInDevPlugin
         if (ffmpeg != null) {
             ffmpeg.shutdown();
         }
+
+        if (spotify != null) {
+            spotify.shutdown();
+        }
+
+        if (recommendations != null) {
+            recommendations.shutdown();
+        }
     }
 
     public YtDlpManager ytDlp() {
@@ -251,6 +265,10 @@ public final class VibesInDevPlugin
 
     public MusicPlaylistManager playlists() {
         return playlists;
+    }
+
+    public RecommendationManager recommendations() {
+        return recommendations;
     }
 
 }

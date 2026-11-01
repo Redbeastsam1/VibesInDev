@@ -44,6 +44,7 @@ public final class MusicMenu implements Listener {
     private static final int SLOT_PARTY     = 24;
     private static final int SLOT_VOL_UP    = 25;
     private static final int SLOT_PLAYLISTS = 18;
+    private static final int SLOT_AUTOPLAY  = 20;
 
     private static final String TITLE = ChatColor.DARK_AQUA + "" + ChatColor.BOLD + " VibesInDev";
 
@@ -129,6 +130,21 @@ public final class MusicMenu implements Listener {
                 ChatColor.WHITE + "Next >>",
                 List.of(ChatColor.GRAY + "Skip to the next track")));
 
+        // Autoplay indicator/toggle (Slot 20)
+        if (plugin.recommendations() != null) {
+            boolean autoplay = plugin.recommendations().isAutoplayEnabled(player.getUniqueId());
+            inv.setItem(SLOT_AUTOPLAY, item(
+                    autoplay ? Material.LIME_DYE : Material.GRAY_DYE,
+                    (autoplay ? ChatColor.GREEN : ChatColor.GRAY) + "" + ChatColor.BOLD + "Autoplay: " + (autoplay ? "ON" : "OFF"),
+                    List.of(
+                            ChatColor.GRAY + "Continuous music recommendations",
+                            ChatColor.GRAY + "Plays similar tracks when queue ends",
+                            "",
+                            autoplay ? ChatColor.GREEN + "Click to disable" : ChatColor.YELLOW + "Click to enable"
+                    )
+            ));
+        }
+
         // Volume
         float vol = plugin.network().getVolume(player);
         int volPct = Math.round(vol * 100.0F);
@@ -188,6 +204,18 @@ public final class MusicMenu implements Listener {
         int slot = event.getRawSlot();
         switch (slot) {
             case SLOT_PLAYLISTS -> plugin.playlistsMenu().open(player);
+            case SLOT_AUTOPLAY -> {
+                if (plugin.recommendations() != null) {
+                    boolean was = plugin.recommendations().isAutoplayEnabled(player.getUniqueId());
+                    plugin.recommendations().setAutoplay(player.getUniqueId(), !was);
+                    player.sendMessage(
+                            (!was ? ChatColor.GREEN + "\u2713 " : ChatColor.GRAY + "\u25cb ")
+                                    + ChatColor.WHITE + "Autoplay "
+                                    + (!was ? ChatColor.GREEN + "enabled." : ChatColor.GRAY + "disabled.")
+                    );
+                    refreshLater(top, player);
+                }
+            }
             case SLOT_PREV -> {
                 plugin.playback().previous(player);
                 refreshLater(top, player);

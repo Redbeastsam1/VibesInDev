@@ -34,6 +34,7 @@ class MusicPlaybackManagerTest {
     @Mock private MetricsManager metricsManager;
     @Mock private TrackCache cache;
     @Mock private YtDlpManager ytDlp;
+    @Mock private dev.vibesindev.vibesmusic.audio.FFmpegManager ffmpeg;
 
     private MusicPlaybackManager playbackManager;
     private final UUID playerId = UUID.randomUUID();
@@ -47,6 +48,8 @@ class MusicPlaybackManagerTest {
         lenient().when(plugin.queues()).thenReturn(queueManager);
         lenient().when(plugin.metrics()).thenReturn(metricsManager);
         lenient().when(plugin.cache()).thenReturn(cache);
+        lenient().when(plugin.ffmpeg()).thenReturn(ffmpeg);
+        lenient().when(ffmpeg.convert(any(), any())).thenReturn(new CompletableFuture<>());
         lenient().when(player.getUniqueId()).thenReturn(playerId);
         lenient().when(plugin.getLogger()).thenReturn(Logger.getLogger("test"));
         

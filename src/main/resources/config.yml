@@ -37,6 +37,11 @@ spotify:
   client-secret: ""
   # redirect-uri is only used if you run /music spotify login for private playlists.
   redirect-uri: "http://127.0.0.1:8888/callback"
+  # Optional local callback server (set enabled: false for 100% portless zero-port-forwarding mode)
+  webserver:
+    enabled: true
+    port: 8888
+    timeout-seconds: 120
   # ISO 3166-1 alpha-2 market code (affects track availability)
   market: "IN"
   playlists:
@@ -56,4 +61,25 @@ playback:
     max-drift-ms: 750
   preload-next: true
 
-
+recommendations:
+  # Optional custom artist lineage mappings (server owners can link any bands & solo artists)
+  lineage:
+    # "one direction": ["harry styles", "zayn", "niall horan", "louis tomlinson", "liam payne"]
+    # "bts": ["jungkook", "jimin", "v", "rm", "suga", "j-hope", "jin"]
+    # "blackpink": ["jennie", "rosé", "lisa", "jisoo"]
+  # Enable continuous autoplay by default when a player's or party's queue runs empty
+  autoplay-default: true
+  # Epsilon-greedy discovery ratio (exploration vs exploitation)
+  exploration-ratio: 0.20
+  # Avoid repeating tracks heard in the last N songs
+  cooldown-tracks: 20
+  cooldown-minutes: 45
+  # Duration bounds for recommended candidates (in seconds)
+  min-duration-seconds: 60
+  max-duration-seconds: 600
+  # Automatically sync Spotify taste profile when a player links their account
+  spotify-sync-on-login: true
+  # Scoring bonus for already-cached tracks
+  cache-bonus: 0.05
+  # Start preloading when this percent of track remains
+  preload-threshold-pct: 15

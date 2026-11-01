@@ -53,6 +53,9 @@ public final class MusicNetworkManager
     private final ConcurrentHashMap<UUID, Float> volumes =
             new ConcurrentHashMap<>();
 
+    private final ConcurrentHashMap<UUID, Boolean> autoplayStates =
+            new ConcurrentHashMap<>();
+
     private final java.io.File settingsFile;
     private final org.bukkit.configuration.file.YamlConfiguration settingsConfig;
 
@@ -87,6 +90,16 @@ public final class MusicNetworkManager
                     } catch (IllegalArgumentException ignored) {}
                 }
             }
+            org.bukkit.configuration.ConfigurationSection autoplaySec = settingsConfig.getConfigurationSection("autoplay");
+            if (autoplaySec != null) {
+                for (String key : autoplaySec.getKeys(false)) {
+                    try {
+                        UUID uuid = UUID.fromString(key);
+                        boolean val = autoplaySec.getBoolean(key, true);
+                        autoplayStates.put(uuid, val);
+                    } catch (IllegalArgumentException ignored) {}
+                }
+            }
         } catch (Exception e) {
             plugin.getLogger().warning("Could not load player_settings.yml: " + e.getMessage());
         }
@@ -101,10 +114,29 @@ public final class MusicNetworkManager
             for (java.util.Map.Entry<UUID, Float> entry : volumes.entrySet()) {
                 settingsConfig.set("volumes." + entry.getKey().toString(), entry.getValue());
             }
+            for (java.util.Map.Entry<UUID, Boolean> entry : autoplayStates.entrySet()) {
+                settingsConfig.set("autoplay." + entry.getKey().toString(), entry.getValue());
+            }
             settingsConfig.save(settingsFile);
         } catch (java.io.IOException e) {
             plugin.getLogger().warning("Could not save player_settings.yml: " + e.getMessage());
         }
+    }
+
+    /**
+     * Persists the autoplay preference for a player and saves settings asynchronously.
+     */
+    public void setAutoplay(UUID playerUuid, boolean enabled) {
+        autoplayStates.put(playerUuid, enabled);
+        plugin.getServer().getScheduler().runTaskAsynchronously(plugin, this::saveSettings);
+    }
+
+    /**
+     * Returns the persisted autoplay preference, defaulting to the config value.
+     */
+    public boolean getAutoplay(UUID playerUuid) {
+        return autoplayStates.getOrDefault(playerUuid,
+                plugin.getConfig().getBoolean("recommendations.autoplay-default", true));
     }
 
     public void setPlaybackManager(

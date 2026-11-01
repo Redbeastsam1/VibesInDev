@@ -37,6 +37,8 @@ public final class MusicParty {
     private RepeatMode repeatMode =
             RepeatMode.OFF;
 
+    private volatile boolean autoplay = true;
+
     private final int maxQueueSize;
 
     public MusicParty(
@@ -345,6 +347,19 @@ public final class MusicParty {
     // ============================================================
     // STRING
     // ============================================================
+
+    // ============================================================
+    // AUTOPLAY
+    // ============================================================
+
+    public boolean isAutoplay() {
+        return autoplay;
+    }
+
+    public void setAutoplay(boolean autoplay) {
+        this.autoplay = autoplay;
+    }
+
 
     @Override
     public String toString() {

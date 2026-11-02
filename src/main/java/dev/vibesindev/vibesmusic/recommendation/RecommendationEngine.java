@@ -108,6 +108,17 @@ public final class RecommendationEngine {
 
     public CompletableFuture<List<RankedPick>> recommendNextRanked(Track seed, PlayerTasteProfile profile, SessionContext sessionContext) {
         if (seed == null) {
+            // Task 4.4: Cold start without seed — seed from server trending filtered through Stream C
+            Track trendingSeed = null;
+            if (plugin != null && plugin.cache() != null) {
+                List<Track> trending = plugin.cache().getTrendingTracks(1);
+                if (trending != null && !trending.isEmpty()) {
+                    trendingSeed = trending.get(0);
+                }
+            }
+            if (trendingSeed != null && plugin != null && plugin.ytDlp() != null) {
+                return recommendNextRanked(trendingSeed, profile, sessionContext);
+            }
             return fallbackTrendingRanked(seed, profile);
         }
 
@@ -116,6 +127,17 @@ public final class RecommendationEngine {
         // Stream C: YouTube Algorithmic Radio Mix (fast, neural cluster) with seed rotation
         if (plugin != null && plugin.ytDlp() != null) {
             futures.add(fetchYouTubeRadioCandidates(seed, sessionContext));
+        }
+
+        // Task 4.4: Cold start enrichment (<5 plays, no Spotify link) — also seed trending through Stream C
+        if (profile != null && profile.isColdStart() && plugin != null && plugin.cache() != null && plugin.ytDlp() != null) {
+            List<Track> trending = plugin.cache().getTrendingTracks(1);
+            if (trending != null && !trending.isEmpty()) {
+                Track trendingSeed = trending.get(0);
+                if (!trendingSeed.id().equals(seed.id())) {
+                    futures.add(fetchYouTubeRadioCandidates(trendingSeed, sessionContext));
+                }
+            }
         }
 
         // Stream D: Local Server Collaborative Filtering (instant SQLite graph)

@@ -13,6 +13,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -346,11 +347,41 @@ public final class RecommendationManager implements org.bukkit.event.Listener {
             }
         } else {
             profile = getOrCreateProfile(playerUuid);
+            checkAndSendColdStartHint(playerUuid, profile);
         }
 
         UUID targetUuid = (party != null && party.getMemberCount() > 1) ? party.getPartyId() : playerUuid;
         SessionContext sessionContext = getOrCreateSessionContext(targetUuid);
         return engine.recommendNextRanked(seed, profile, sessionContext);
+    }
+
+    // =========================================================
+    // COLD START ACTION BAR HINT (Task 4.4)
+    // =========================================================
+
+    private final Set<UUID> sessionSpotifyHinted = ConcurrentHashMap.newKeySet();
+
+    public boolean hasSentColdStartHint(UUID playerUuid) {
+        return sessionSpotifyHinted.contains(playerUuid);
+    }
+
+    public void checkAndSendColdStartHint(UUID playerUuid, PlayerTasteProfile profile) {
+        if (playerUuid == null || profile == null) return;
+        if (!sessionSpotifyHinted.contains(playerUuid) && profile.isColdStart()) {
+            boolean hasSpotify = plugin != null && plugin.spotify() != null && plugin.spotify().hasUserAuthorization(playerUuid);
+            if (!hasSpotify) {
+                sessionSpotifyHinted.add(playerUuid);
+                if (org.bukkit.Bukkit.getServer() != null) {
+                    Player player = org.bukkit.Bukkit.getPlayer(playerUuid);
+                    if (player != null && player.isOnline()) {
+                        String tip = ChatColor.GOLD + "Tip: Connect your Spotify with "
+                                + ChatColor.YELLOW + "/music spotify login "
+                                + ChatColor.GOLD + "for personalized autoplay!";
+                        player.spigot().sendMessage(ChatMessageType.ACTION_BAR, TextComponent.fromLegacy(tip));
+                    }
+                }
+            }
+        }
     }
 
     // =========================================================
@@ -416,14 +447,14 @@ public final class RecommendationManager implements org.bukkit.event.Listener {
     // =========================================================
 
     public void saveProfile(UUID playerUuid) {
-        if (playerUuid == null || plugin.cache() == null) return;
+        if (playerUuid == null || plugin == null || plugin.cache() == null) return;
         PlayerTasteProfile profile = tasteProfiles.get(playerUuid);
         if (profile == null) return;
         CompletableFuture.runAsync(() -> saveProfileSync(playerUuid));
     }
 
     public void saveProfileSync(UUID playerUuid) {
-        if (playerUuid == null || plugin.cache() == null) return;
+        if (playerUuid == null || plugin == null || plugin.cache() == null) return;
         PlayerTasteProfile profile = tasteProfiles.get(playerUuid);
         if (profile == null) return;
         plugin.cache().saveTasteProfile(
@@ -455,6 +486,7 @@ public final class RecommendationManager implements org.bukkit.event.Listener {
         if (playerUuid == null) return;
         saveProfileSync(playerUuid);
         sessionContexts.remove(playerUuid);
+        sessionSpotifyHinted.remove(playerUuid);
     }
 
     public void onPartyDisband(UUID partyUuid) {

@@ -87,6 +87,9 @@ public final class PlayerTasteProfile {
     /** Tracks timestamp of last early skip per artist to penalize only on 2nd+ skip in 24h. */
     private final Map<String, Long> recentArtistEarlySkips = new ConcurrentHashMap<>();
 
+    /** Total plays count for cold-start detection. */
+    private int totalPlays = 0;
+
     /** Per-profile dynamic lineage learned from Spotify related artists or user sessions. */
     private final Map<String, Set<String>> dynamicLineage = new ConcurrentHashMap<>();
     private final Map<String, Map<String, Double>> dynamicLineageWeights = new ConcurrentHashMap<>();
@@ -320,6 +323,20 @@ public final class PlayerTasteProfile {
                 recentArtists.removeFirst();
             }
         }
+
+        totalPlays++;
+    }
+
+    public synchronized int getTotalPlays() {
+        return Math.max(totalPlays, fatigueHistory.size());
+    }
+
+    public synchronized void setTotalPlays(int totalPlays) {
+        this.totalPlays = totalPlays;
+    }
+
+    public synchronized boolean isColdStart() {
+        return getTotalPlays() < 5 && (spotifyGenreMass == null || spotifyGenreMass.isEmpty());
     }
 
     @Deprecated

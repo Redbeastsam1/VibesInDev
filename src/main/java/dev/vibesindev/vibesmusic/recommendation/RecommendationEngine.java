@@ -117,8 +117,8 @@ public final class RecommendationEngine {
             futures.add(fetchCollaborativeCandidates(seed));
         }
 
-        // Stream A & B: If Spotify is enabled and configured, query Spotify candidate streams
-        if (plugin != null && plugin.spotify() != null && plugin.spotify().isConfigured()) {
+        // Stream A & B: Local catalog + Spotify (if available) & Spotify micro-genre search
+        if (seed != null) {
             futures.add(fetchSpotifyCandidates(seed, profile));
         }
 
@@ -256,25 +256,61 @@ public final class RecommendationEngine {
     }
 
     /**
-     * Streams A & B: Seed artist top tracks & micro-genre clustering via Spotify.
+     * Stream A: Local catalog + Spotify (if available) & Stream B: Spotify micro-genre search.
      */
-    private CompletableFuture<List<RecommendationCandidate>> fetchSpotifyCandidates(Track seed, PlayerTasteProfile profile) {
+    CompletableFuture<List<RecommendationCandidate>> fetchSpotifyCandidates(Track seed, PlayerTasteProfile profile) {
         List<RecommendationCandidate> list = new CopyOnWriteArrayList<>();
+        List<CompletableFuture<Void>> asyncFutures = new ArrayList<>();
 
-        // Stream A: Same artist catalog
-        List<Track> sameArtistTracks = plugin.cache().getTracksByArtist(seed.artist(), 3);
-        for (Track t : sameArtistTracks) {
-            if (t != null && !PlayerTasteProfile.isSameSongOrRemix(t, seed)) {
-                list.add(new RecommendationCandidate(
-                        t, 0.0, RecommendationCandidate.Source.SPOTIFY_ARTIST_TOP,
-                        "Same artist catalog: " + seed.artist(), plugin.cache().hasAudio(t.id())
-                ));
+        // Stream A: Local catalog same-artist tracks
+        if (plugin != null && plugin.cache() != null && seed != null && seed.artist() != null) {
+            List<Track> sameArtistTracks = plugin.cache().getTracksByArtist(seed.artist(), 3);
+            if (sameArtistTracks != null) {
+                for (Track t : sameArtistTracks) {
+                    if (t != null && !PlayerTasteProfile.isSameSongOrRemix(t, seed)) {
+                        list.add(new RecommendationCandidate(
+                                t, 0.0, RecommendationCandidate.Source.SPOTIFY_ARTIST_TOP,
+                                "local catalog + Spotify (if available): " + seed.artist(), plugin.cache().hasAudio(t.id())
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Stream A: Spotify artist top tracks if seed artist Spotify ID is known and feature is available
+        if (seed != null && seed.artist() != null && plugin != null && plugin.spotify() != null && plugin.spotify().isConfigured()) {
+            String artistId = plugin.spotify().getKnownArtistId(seed.artist());
+            if (artistId != null && plugin.spotify().isFeatureAvailable(SpotifyHttp.Feature.ARTIST_TOP_TRACKS)) {
+                asyncFutures.add(plugin.spotify().getArtistTopTracks(artistId)
+                        .thenAccept(topTracks -> {
+                            if (topTracks != null) {
+                                for (Track t : topTracks) {
+                                    if (t != null && !PlayerTasteProfile.isSameSongOrRemix(t, seed)) {
+                                        boolean exists = false;
+                                        for (RecommendationCandidate c : list) {
+                                            if (c.track() != null && RecordingIdentity.sameRecording(c.track(), t)) {
+                                                exists = true;
+                                                break;
+                                            }
+                                        }
+                                        if (!exists) {
+                                            list.add(new RecommendationCandidate(
+                                                    t, 0.0, RecommendationCandidate.Source.SPOTIFY_ARTIST_TOP,
+                                                    "local catalog + Spotify (if available): " + seed.artist(),
+                                                    plugin.cache() != null && plugin.cache().hasAudio(t.id())
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                        }).exceptionally(err -> null));
             }
         }
 
         // Stream B: Spotify Micro-genre search if profile has genres (Task 2.2: sample up to 3 genres without replacement)
         if (profile != null && !profile.getGenreDistribution().isEmpty()) {
-            if (plugin.spotify() != null && plugin.spotify().isFeatureAvailable(SpotifyHttp.Feature.GENRE_SEARCH)) {
+            if (plugin != null && plugin.spotify() != null && plugin.spotify().isConfigured()
+                    && plugin.spotify().isFeatureAvailable(SpotifyHttp.Feature.GENRE_SEARCH)) {
                 double temp = (plugin.getConfig() != null)
                         ? plugin.getConfig().getDouble("recommendations.genre-sample-temperature", 1.0) : 1.0;
                 int perGenreLimit = (plugin.getConfig() != null)
@@ -283,28 +319,29 @@ public final class RecommendationEngine {
                 List<String> sampledGenres = sampleGenres(profile.getGenreDistribution(), 3, temp, RANDOM);
 
                 if (!sampledGenres.isEmpty()) {
-                    List<CompletableFuture<Void>> futures = new ArrayList<>();
                     for (String genre : sampledGenres) {
-                        futures.add(plugin.spotify().searchGenreTracks(genre, perGenreLimit)
+                        asyncFutures.add(plugin.spotify().searchGenreTracks(genre, perGenreLimit)
                                 .thenAccept(genreTracks -> {
                                     if (genreTracks != null) {
                                         for (Track gt : genreTracks) {
                                             if (gt != null && !PlayerTasteProfile.isSameSongOrRemix(gt, seed)) {
                                                 list.add(new RecommendationCandidate(
                                                         gt, 0.0, RecommendationCandidate.Source.SPOTIFY_GENRE,
-                                                        "Spotify micro-genre: " + genre, plugin.cache().hasAudio(gt.id())
+                                                        "Spotify micro-genre: " + genre, plugin.cache() != null && plugin.cache().hasAudio(gt.id())
                                                 ));
                                             }
                                         }
                                     }
                                 }).exceptionally(err -> null));
                     }
-
-                    return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
-                            .thenApply(v -> list)
-                            .exceptionally(err -> list);
                 }
             }
+        }
+
+        if (!asyncFutures.isEmpty()) {
+            return CompletableFuture.allOf(asyncFutures.toArray(new CompletableFuture[0]))
+                    .thenApply(v -> list)
+                    .exceptionally(err -> list);
         }
 
         return CompletableFuture.completedFuture(list);

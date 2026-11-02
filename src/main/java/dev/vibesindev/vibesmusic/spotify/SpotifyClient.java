@@ -126,6 +126,28 @@ public final class SpotifyClient {
     private final HttpClient http;
     private final SpotifyHttp spotifyHttp = new SpotifyHttp();
 
+    private static final Map<String, String> KNOWN_ARTIST_IDS = new ConcurrentHashMap<>();
+
+    public static void registerKnownArtist(String artistName, String artistId) {
+        if (artistName != null && artistId != null && !artistName.isBlank() && !artistId.isBlank()) {
+            KNOWN_ARTIST_IDS.put(dev.vibesindev.vibesmusic.recommendation.ArtistNames.normalize(artistName), artistId);
+        }
+    }
+
+    public String getKnownArtistId(String artistName) {
+        if (artistName == null || artistName.isBlank()) return null;
+        return KNOWN_ARTIST_IDS.get(dev.vibesindev.vibesmusic.recommendation.ArtistNames.normalize(artistName));
+    }
+
+    public static String getKnownArtistIdStatic(String artistName) {
+        if (artistName == null || artistName.isBlank()) return null;
+        return KNOWN_ARTIST_IDS.get(dev.vibesindev.vibesmusic.recommendation.ArtistNames.normalize(artistName));
+    }
+
+    public static void clearKnownArtistIds() {
+        KNOWN_ARTIST_IDS.clear();
+    }
+
 
 
     private final String clientId;
@@ -1795,7 +1817,11 @@ public final class SpotifyClient {
                 if (aEl != null && aEl.isJsonObject()) {
                     com.google.gson.JsonObject aObj = aEl.getAsJsonObject();
                     if (aObj.has("name") && !aObj.get("name").isJsonNull()) {
-                        artistNames.add(aObj.get("name").getAsString());
+                        String aName = aObj.get("name").getAsString();
+                        artistNames.add(aName);
+                        if (aObj.has("id") && !aObj.get("id").isJsonNull()) {
+                            registerKnownArtist(aName, aObj.get("id").getAsString());
+                        }
                     }
                 }
             }
@@ -2093,6 +2119,13 @@ public final class SpotifyClient {
                                     com.google.gson.JsonArray items = root.getAsJsonObject("artists").getAsJsonArray("items");
                                     if (items.size() > 0) {
                                         com.google.gson.JsonObject artistObj = items.get(0).getAsJsonObject();
+                                        if (artistObj.has("id") && !artistObj.get("id").isJsonNull()) {
+                                            String foundId = artistObj.get("id").getAsString();
+                                            registerKnownArtist(artistName, foundId);
+                                            if (artistObj.has("name") && !artistObj.get("name").isJsonNull()) {
+                                                registerKnownArtist(artistObj.get("name").getAsString(), foundId);
+                                            }
+                                        }
                                         if (artistObj.has("genres")) {
                                             for (com.google.gson.JsonElement el : artistObj.getAsJsonArray("genres")) {
                                                 genres.add(el.getAsString());
@@ -2118,62 +2151,46 @@ public final class SpotifyClient {
      */
 
     public CompletableFuture<List<Track>> getArtistTopTracks(String artistId) {
+        if (artistId == null || artistId.isBlank() || !isFeatureAvailable(SpotifyHttp.Feature.ARTIST_TOP_TRACKS)) {
+            return CompletableFuture.completedFuture(Collections.emptyList());
+        }
 
         return getClientToken().thenCompose(token -> {
-
             String url = API_URL + "/artists/" + enc(artistId) + "/top-tracks?market=" + enc(market);
-
             HttpRequest request = HttpRequest.newBuilder()
-
                     .uri(URI.create(url))
-
-                    .timeout(Duration.ofSeconds(15))
-
+                    .timeout(Duration.ofSeconds(10))
                     .header("Authorization", "Bearer " + token)
-
                     .GET()
-
                     .build();
 
-
-
             return http.sendAsync(request, HttpResponse.BodyHandlers.ofString())
-
                     .thenApply(response -> {
-
                         List<Track> tracks = new ArrayList<>();
-
-                        if (response.statusCode() == 200) {
-
+                        if (response.statusCode() == 200 && response.body() != null) {
                             try {
-
                                 com.google.gson.JsonObject root = com.google.gson.JsonParser.parseString(response.body()).getAsJsonObject();
-
                                 if (root.has("tracks") && root.get("tracks").isJsonArray()) {
-
                                     for (com.google.gson.JsonElement el : root.getAsJsonArray("tracks")) {
-
                                         if (el.isJsonObject()) {
                                             dev.vibesindev.vibesmusic.model.Track parsed = parseTrack(el.getAsJsonObject());
                                             if (parsed != null) {
                                                 tracks.add(parsed);
                                             }
                                         }
-
                                     }
-
                                 }
-
-                            } catch (Exception ignored) {}
-
+                            } catch (Exception e) {
+                                if (plugin != null && plugin.getLogger() != null) {
+                                    plugin.getLogger().warning("[VibesInDev] Failed to parse artist top tracks: " + e.getMessage());
+                                }
+                            }
+                        } else if (response.statusCode() == 404 || response.statusCode() == 403 || response.statusCode() == 410) {
+                            spotifyHttp.disableFeature(SpotifyHttp.Feature.ARTIST_TOP_TRACKS);
                         }
-
                         return tracks;
-
-                    });
-
+                    }).exceptionally(ex -> Collections.emptyList());
         });
-
     }
 
 
@@ -2270,6 +2287,9 @@ public final class SpotifyClient {
                                             }
                                             if (!name.isBlank()) {
                                                 list.add(new SpotifyArtistSummary(id, name, genres));
+                                                if (!id.isBlank()) {
+                                                    registerKnownArtist(name, id);
+                                                }
                                             }
                                         }
                                     }

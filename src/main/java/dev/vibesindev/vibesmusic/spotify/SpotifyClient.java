@@ -2185,77 +2185,51 @@ public final class SpotifyClient {
      */
 
     public CompletableFuture<List<Track>> searchGenreTracks(String genre, int limit) {
+        if (genre == null || genre.isBlank() || !isFeatureAvailable(SpotifyHttp.Feature.GENRE_SEARCH)) {
+            return CompletableFuture.completedFuture(Collections.emptyList());
+        }
 
-        return getClientToken().thenCompose(token -> {
+        return getClientToken().thenCompose(token -> executeGenreSearch(genre, Math.min(50, limit), token, true));
+    }
 
-            String url = API_URL + "/search?q=genre:" + enc("\"" + genre + "\"") + "&type=track&limit=" + Math.min(50, limit) + "&market=" + enc(market);
+    private CompletableFuture<List<Track>> executeGenreSearch(String genre, int limit, String token, boolean allowRetryOn400) {
+        String url = API_URL + "/search?q=genre:" + enc("\"" + genre + "\"") + "&type=track&limit=" + limit + "&market=" + enc(market);
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .timeout(Duration.ofSeconds(10))
+                .header("Authorization", "Bearer " + token)
+                .GET()
+                .build();
 
-            HttpRequest request = HttpRequest.newBuilder()
-
-                    .uri(URI.create(url))
-
-                    .timeout(Duration.ofSeconds(15))
-
-                    .header("Authorization", "Bearer " + token)
-
-                    .GET()
-
-                    .build();
-
-
-
-            return http.sendAsync(request, HttpResponse.BodyHandlers.ofString())
-
-                    .thenApply(response -> {
-
+        return http.sendAsync(request, HttpResponse.BodyHandlers.ofString())
+                .thenCompose(response -> {
+                    int status = response.statusCode();
+                    if (status == 200 && response.body() != null) {
                         List<Track> tracks = new ArrayList<>();
-
-                        if (response.statusCode() == 200) {
-
-                            try {
-
-                                com.google.gson.JsonObject root = com.google.gson.JsonParser.parseString(response.body()).getAsJsonObject();
-
-                                if (root.has("tracks") && root.getAsJsonObject("tracks").has("items")) {
-
-                                    for (com.google.gson.JsonElement el : root.getAsJsonObject("tracks").getAsJsonArray("items")) {
-
-                                        if (el.isJsonObject()) {
-
-                                            com.google.gson.JsonObject tr = el.getAsJsonObject();
-
-                                            String id = tr.get("id").getAsString();
-
-                                            String title = tr.get("name").getAsString();
-
-                                            long dur = tr.get("duration_ms").getAsLong() / 1000L;
-
-                                            String artist = "Unknown";
-
-                                            if (tr.has("artists") && tr.get("artists").isJsonArray() && tr.getAsJsonArray("artists").size() > 0) {
-
-                                                artist = tr.getAsJsonArray("artists").get(0).getAsJsonObject().get("name").getAsString();
-
-                                            }
-
-                                            tracks.add(new Track(id, title, artist, dur, "spotify-lazy:" + artist + " - " + title + "::" + dur));
-
+                        try {
+                            com.google.gson.JsonObject root = com.google.gson.JsonParser.parseString(response.body()).getAsJsonObject();
+                            if (root.has("tracks") && root.getAsJsonObject("tracks").has("items")) {
+                                for (com.google.gson.JsonElement el : root.getAsJsonObject("tracks").getAsJsonArray("items")) {
+                                    if (el.isJsonObject()) {
+                                        Track parsed = parseTrack(el.getAsJsonObject());
+                                        if (parsed != null) {
+                                            tracks.add(parsed);
                                         }
-
                                     }
-
                                 }
-
-                            } catch (Exception ignored) {}
-
+                            }
+                        } catch (Exception e) {
+                            plugin.getLogger().warning("[VibesInDev] Failed to parse genre search tracks: " + e.getMessage());
                         }
-
-                        return tracks;
-
-                    });
-
-        });
-
+                        return CompletableFuture.completedFuture(tracks);
+                    } else if (status == 400 && allowRetryOn400 && limit > 4) {
+                        // Handle 400 on limit gracefully by retrying once with smaller limit
+                        return executeGenreSearch(genre, Math.max(1, limit / 2), token, false);
+                    } else if (status == 403 || status == 404 || status == 410) {
+                        spotifyHttp.disableFeature(SpotifyHttp.Feature.GENRE_SEARCH);
+                    }
+                    return CompletableFuture.completedFuture(Collections.emptyList());
+                }).exceptionally(ex -> Collections.emptyList());
     }
 
 

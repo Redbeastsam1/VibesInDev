@@ -2,9 +2,11 @@ package dev.vibesindev.vibesmusic.recommendation;
 
 import dev.vibesindev.vibesmusic.VibesInDevPlugin;
 import dev.vibesindev.vibesmusic.model.Track;
+import dev.vibesindev.vibesmusic.spotify.SpotifyHttp;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -270,35 +272,102 @@ public final class RecommendationEngine {
             }
         }
 
-        // Stream B: Spotify Micro-genre search if profile has top genres
+        // Stream B: Spotify Micro-genre search if profile has genres (Task 2.2: sample up to 3 genres without replacement)
         if (profile != null && !profile.getGenreDistribution().isEmpty()) {
-            String topGenre = null;
-            double highestProb = -1.0;
-            for (Map.Entry<String, Double> entry : profile.getGenreDistribution().entrySet()) {
-                if (entry != null && entry.getValue() != null && entry.getValue().doubleValue() > highestProb) {
-                    highestProb = entry.getValue().doubleValue();
-                    topGenre = entry.getKey();
+            if (plugin.spotify() != null && plugin.spotify().isFeatureAvailable(SpotifyHttp.Feature.GENRE_SEARCH)) {
+                double temp = (plugin.getConfig() != null)
+                        ? plugin.getConfig().getDouble("recommendations.genre-sample-temperature", 1.0) : 1.0;
+                int perGenreLimit = (plugin.getConfig() != null)
+                        ? plugin.getConfig().getInt("recommendations.per-genre-limit", 12) : 12;
+
+                List<String> sampledGenres = sampleGenres(profile.getGenreDistribution(), 3, temp, RANDOM);
+
+                if (!sampledGenres.isEmpty()) {
+                    List<CompletableFuture<Void>> futures = new ArrayList<>();
+                    for (String genre : sampledGenres) {
+                        futures.add(plugin.spotify().searchGenreTracks(genre, perGenreLimit)
+                                .thenAccept(genreTracks -> {
+                                    if (genreTracks != null) {
+                                        for (Track gt : genreTracks) {
+                                            if (gt != null && !PlayerTasteProfile.isSameSongOrRemix(gt, seed)) {
+                                                list.add(new RecommendationCandidate(
+                                                        gt, 0.0, RecommendationCandidate.Source.SPOTIFY_GENRE,
+                                                        "Spotify micro-genre: " + genre, plugin.cache().hasAudio(gt.id())
+                                                ));
+                                            }
+                                        }
+                                    }
+                                }).exceptionally(err -> null));
+                    }
+
+                    return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                            .thenApply(v -> list)
+                            .exceptionally(err -> list);
                 }
-            }
-            if (topGenre != null && !topGenre.isBlank()) {
-                final String selectedGenre = topGenre;
-                return plugin.spotify().searchGenreTracks(selectedGenre, 5)
-                        .thenApply(genreTracks -> {
-                            if (genreTracks != null) {
-                                for (Track gt : genreTracks) {
-                                    list.add(new RecommendationCandidate(
-                                            gt, 0.0, RecommendationCandidate.Source.SPOTIFY_GENRE,
-                                            "Spotify micro-genre: " + selectedGenre, plugin.cache().hasAudio(gt.id())
-                                    ));
-                                }
-                            }
-                            return list;
-                        })
-                        .exceptionally(err -> list);
             }
         }
 
         return CompletableFuture.completedFuture(list);
+    }
+
+    /**
+     * Samples up to maxCount genres without replacement, weighted by P(genre)^(1/T).
+     * If temperature <= 0, falls back to argmax (top N by probability).
+     */
+    public static List<String> sampleGenres(Map<String, Double> distribution, int maxCount, double temperature, Random random) {
+        if (distribution == null || distribution.isEmpty() || maxCount <= 0) {
+            return Collections.emptyList();
+        }
+        Random rng = (random != null) ? random : RANDOM;
+
+        if (temperature <= 0.0) {
+            List<Map.Entry<String, Double>> sorted = new ArrayList<>(distribution.entrySet());
+            sorted.sort((a, b) -> Double.compare(b.getValue(), a.getValue()));
+            List<String> result = new ArrayList<>();
+            for (int i = 0; i < Math.min(maxCount, sorted.size()); i++) {
+                result.add(sorted.get(i).getKey());
+            }
+            return result;
+        }
+
+        Map<String, Double> pool = new HashMap<>();
+        for (Map.Entry<String, Double> e : distribution.entrySet()) {
+            if (e.getKey() != null && !e.getKey().isBlank() && e.getValue() != null && e.getValue() > 0.0) {
+                double transformed = Math.pow(e.getValue(), 1.0 / temperature);
+                if (transformed > 0.0 && !Double.isNaN(transformed) && !Double.isInfinite(transformed)) {
+                    pool.put(e.getKey(), transformed);
+                }
+            }
+        }
+
+        List<String> sampled = new ArrayList<>();
+        while (sampled.size() < maxCount && !pool.isEmpty()) {
+            double totalWeight = 0.0;
+            for (double w : pool.values()) totalWeight += w;
+            if (totalWeight <= 0.0) {
+                String fallbackKey = pool.keySet().iterator().next();
+                sampled.add(fallbackKey);
+                pool.remove(fallbackKey);
+                continue;
+            }
+
+            double r = rng.nextDouble() * totalWeight;
+            double running = 0.0;
+            String pickedKey = null;
+            for (Map.Entry<String, Double> entry : pool.entrySet()) {
+                running += entry.getValue();
+                if (running >= r) {
+                    pickedKey = entry.getKey();
+                    break;
+                }
+            }
+            if (pickedKey == null) {
+                pickedKey = pool.keySet().iterator().next();
+            }
+            sampled.add(pickedKey);
+            pool.remove(pickedKey);
+        }
+        return sampled;
     }
 
     /**

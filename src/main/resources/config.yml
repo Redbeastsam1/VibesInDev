@@ -101,6 +101,8 @@ recommendations:
   # Engine v2 settings and staged rollout
   engine-v2: true
   engine-v2-rollout-percent: 0
+  genre-sample-temperature: 1.0
+  per-genre-limit: 12
   # External metadata enrichment (optional)
   external:
     lastfm-api-key: ""

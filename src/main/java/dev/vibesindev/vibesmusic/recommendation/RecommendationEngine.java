@@ -103,15 +103,19 @@ public final class RecommendationEngine {
      * @return future resolving to the highest-scoring recommended track, or {@code null} if all fail
      */
     public CompletableFuture<List<RankedPick>> recommendNextRanked(Track seed, PlayerTasteProfile profile) {
+        return recommendNextRanked(seed, profile, null);
+    }
+
+    public CompletableFuture<List<RankedPick>> recommendNextRanked(Track seed, PlayerTasteProfile profile, SessionContext sessionContext) {
         if (seed == null) {
             return fallbackTrendingRanked(seed, profile);
         }
 
         List<CompletableFuture<List<RecommendationCandidate>>> futures = new ArrayList<>();
 
-        // Stream C: YouTube Algorithmic Radio Mix (fast, neural cluster)
+        // Stream C: YouTube Algorithmic Radio Mix (fast, neural cluster) with seed rotation
         if (plugin != null && plugin.ytDlp() != null) {
-            futures.add(fetchYouTubeRadioCandidates(seed));
+            futures.add(fetchYouTubeRadioCandidates(seed, sessionContext));
         }
 
         // Stream D: Local Server Collaborative Filtering (instant SQLite graph)
@@ -129,7 +133,7 @@ public final class RecommendationEngine {
             futures.add(fetchFamiliarCandidates(seed, profile));
         }
 
-        return gatherAndPickRanked(futures, seed, profile);
+        return gatherAndPickRanked(futures, seed, profile, sessionContext);
     }
 
     public CompletableFuture<Track> recommendNext(Track seed, PlayerTasteProfile profile) {
@@ -144,6 +148,15 @@ public final class RecommendationEngine {
             List<CompletableFuture<List<RecommendationCandidate>>> streamFutures,
             Track seed,
             PlayerTasteProfile profile
+    ) {
+        return gatherAndPickRanked(streamFutures, seed, profile, null);
+    }
+
+    public CompletableFuture<List<RankedPick>> gatherAndPickRanked(
+            List<CompletableFuture<List<RecommendationCandidate>>> streamFutures,
+            Track seed,
+            PlayerTasteProfile profile,
+            SessionContext sessionContext
     ) {
         List<CompletableFuture<List<RecommendationCandidate>>> guardedFutures = new ArrayList<>();
         if (streamFutures != null) {
@@ -177,7 +190,7 @@ public final class RecommendationEngine {
                     }
 
                     // Score and rank candidates
-                    List<RankedPick> picks = scoreAndRankCandidates(candidates, seed, profile);
+                    List<RankedPick> picks = scoreAndRankCandidates(candidates, seed, profile, sessionContext);
                     if (picks != null && !picks.isEmpty()) {
                         return CompletableFuture.completedFuture(picks);
                     }
@@ -203,11 +216,18 @@ public final class RecommendationEngine {
      * Stream C: Fetches YouTube Radio Mix candidates (RD{id}) via flat-playlist.
      */
     private CompletableFuture<List<RecommendationCandidate>> fetchYouTubeRadioCandidates(Track seed) {
-        String ytId = extractYouTubeId(seed);
+        return fetchYouTubeRadioCandidates(seed, null);
+    }
+
+    private CompletableFuture<List<RecommendationCandidate>> fetchYouTubeRadioCandidates(Track seed, SessionContext sessionContext) {
+        Track radioSeed = (sessionContext != null) ? sessionContext.getStreamCSeed(seed) : seed;
+        if (radioSeed == null) radioSeed = seed;
+        final Track effectiveSeed = radioSeed;
+        String ytId = extractYouTubeId(effectiveSeed);
         if (ytId == null) {
             // Seed is a non-YouTube track (e.g. Spotify track).
             // Search YouTube to find the video ID of the seed track so we can query its real Radio Mix
-            return plugin.ytDlp().search(seed.artist() + " " + seed.title())
+            return plugin.ytDlp().search(effectiveSeed.artist() + " " + effectiveSeed.title())
                     .thenCompose(resolvedSeed -> {
                         if (resolvedSeed != null && resolvedSeed.id() != null && !resolvedSeed.id().isBlank()) {
                             String foundId = extractYouTubeId(resolvedSeed);
@@ -222,7 +242,7 @@ public final class RecommendationEngine {
                         List<RecommendationCandidate> result = new ArrayList<>();
                         if (tracks != null) {
                             for (Track t : tracks) {
-                                if (t != null && !PlayerTasteProfile.isSameSongOrRemix(t, seed)) {
+                                if (t != null && !PlayerTasteProfile.isSameSongOrRemix(t, effectiveSeed)) {
                                     result.add(new RecommendationCandidate(
                                             t, 0.0, RecommendationCandidate.Source.YOUTUBE_RADIO, "YouTube RD Neural Cluster", plugin.cache().hasAudio(t.id())
                                     ));
@@ -240,7 +260,7 @@ public final class RecommendationEngine {
                     List<RecommendationCandidate> result = new ArrayList<>();
                     if (tracks != null) {
                         for (Track t : tracks) {
-                            if (t != null && !PlayerTasteProfile.isSameSongOrRemix(t, seed)) {
+                            if (t != null && !PlayerTasteProfile.isSameSongOrRemix(t, effectiveSeed)) {
                                 result.add(new RecommendationCandidate(
                                         t, 0.0, RecommendationCandidate.Source.YOUTUBE_RADIO, "YouTube RD Neural Cluster", plugin.cache().hasAudio(t.id())
                                 ));
@@ -635,9 +655,18 @@ public final class RecommendationEngine {
             Track seed,
             PlayerTasteProfile profile
     ) {
+        return scoreAndRankCandidates(candidates, seed, profile, null);
+    }
+
+    public List<RankedPick> scoreAndRankCandidates(
+            List<RecommendationCandidate> candidates,
+            Track seed,
+            PlayerTasteProfile profile,
+            SessionContext sessionContext
+    ) {
         UUID uuid = profile != null ? profile.getPlayerUuid() : null;
         if (isEngineV2Enabled(uuid)) {
-            return scoreAndRankCandidatesV2(candidates, seed, profile, RANDOM);
+            return scoreAndRankCandidatesV2(candidates, seed, profile, sessionContext, RANDOM);
         }
         Track best = scoreAndPickBestLegacy(candidates, seed, profile);
         if (best != null) {
@@ -874,6 +903,16 @@ public final class RecommendationEngine {
             PlayerTasteProfile profile,
             Random random
     ) {
+        return scoreAndRankCandidatesV2(candidates, seed, profile, null, random);
+    }
+
+    List<RankedPick> scoreAndRankCandidatesV2(
+            List<RecommendationCandidate> candidates,
+            Track seed,
+            PlayerTasteProfile profile,
+            SessionContext sessionContext,
+            Random random
+    ) {
         if (candidates == null || candidates.isEmpty()) {
             return Collections.emptyList();
         }
@@ -1026,18 +1065,6 @@ public final class RecommendationEngine {
                 // Artist affinity
                 double artistAffinity = profile != null ? profile.getArtistAffinity(t.artist()) : 0.2;
 
-                // Continuity
-                double continuity = 0.40;
-                if (seed != null) {
-                    if (ArtistNames.sameArtist(seed.artist(), t.artist())) {
-                        continuity = 0.85;
-                    } else if (c.source() == RecommendationCandidate.Source.YOUTUBE_RADIO) {
-                        continuity = 0.75;
-                    } else if (c.source() == RecommendationCandidate.Source.SERVER_COLLABORATIVE) {
-                        continuity = 0.70;
-                    }
-                }
-
                 // Genre similarity
                 List<String> candidateGenres = (genreResolver != null && t.artist() != null)
                         ? genreResolver.getCachedGenres(t.artist()) : Collections.emptyList();
@@ -1045,6 +1072,24 @@ public final class RecommendationEngine {
                 double genreCosine = (profile != null && hasGenre)
                         ? profile.calculateGenreCosineSimilarity(candidateGenres) : -1.0;
                 if (genreCosine < 0.0) hasGenre = false;
+
+                // Continuity
+                double continuity;
+                if (sessionContext != null) {
+                    boolean fromRadio = (c.source() == RecommendationCandidate.Source.YOUTUBE_RADIO);
+                    continuity = sessionContext.calculateContinuity(t, candidateGenres, 0, seed, profile, fromRadio);
+                } else {
+                    continuity = 0.40;
+                    if (seed != null) {
+                        if (ArtistNames.sameArtist(seed.artist(), t.artist())) {
+                            continuity = 0.85;
+                        } else if (c.source() == RecommendationCandidate.Source.YOUTUBE_RADIO) {
+                            continuity = 0.75;
+                        } else if (c.source() == RecommendationCandidate.Source.SERVER_COLLABORATIVE) {
+                            continuity = 0.70;
+                        }
+                    }
+                }
 
                 // Familiarity
                 String compKey = RecordingIdentity.compositionTitleKey(t.title(), t.artist());

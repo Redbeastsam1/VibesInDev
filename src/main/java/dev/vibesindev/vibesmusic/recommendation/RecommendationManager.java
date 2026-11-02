@@ -193,11 +193,22 @@ public final class RecommendationManager implements org.bukkit.event.Listener {
         if (outcome == Outcome.COMPLETED || ratio >= 0.80) {
             double gain = (plugin != null && plugin.getConfig() != null)
                     ? plugin.getConfig().getDouble("recommendations.signals.completion-gain", 0.08) : 0.08;
+            List<String> cachedGenres = Collections.emptyList();
             if (genreResolver != null && track.artist() != null) {
                 List<String> genres = genreResolver.getCachedGenres(track.artist());
                 if (genres != null && !genres.isEmpty()) {
+                    cachedGenres = genres;
                     profile.ingestArtistGenres(genres, gain);
                 }
+            }
+
+            // Task 3.2: Ingest into session context
+            SessionContext sc = getOrCreateSessionContext(playerUuid);
+            sc.recordCompletedTrack(track, cachedGenres, 0, null);
+
+            MusicParty party = (plugin != null && plugin.parties() != null) ? plugin.parties().getPartyByPlayer(playerUuid) : null;
+            if (party != null && party.getMemberCount() > 1) {
+                getOrCreateSessionContext(party.getPartyId()).recordCompletedTrack(track, cachedGenres, 0, null);
             }
         }
 
@@ -304,7 +315,20 @@ public final class RecommendationManager implements org.bukkit.event.Listener {
             profile = getOrCreateProfile(playerUuid);
         }
 
-        return engine.recommendNextRanked(seed, profile);
+        UUID targetUuid = (party != null && party.getMemberCount() > 1) ? party.getPartyId() : playerUuid;
+        SessionContext sessionContext = getOrCreateSessionContext(targetUuid);
+        return engine.recommendNextRanked(seed, profile, sessionContext);
+    }
+
+    // =========================================================
+    // SESSION CONTEXT
+    // =========================================================
+
+    private final Map<UUID, SessionContext> sessionContexts = new ConcurrentHashMap<>();
+
+    public SessionContext getOrCreateSessionContext(UUID targetUuid) {
+        if (targetUuid == null) return new SessionContext();
+        return sessionContexts.computeIfAbsent(targetUuid, k -> new SessionContext());
     }
 
     // =========================================================
@@ -396,10 +420,12 @@ public final class RecommendationManager implements org.bukkit.event.Listener {
     public void onPlayerQuit(UUID playerUuid) {
         if (playerUuid == null) return;
         saveProfileSync(playerUuid);
+        sessionContexts.remove(playerUuid);
     }
 
     public void onPartyDisband(UUID partyUuid) {
         partyAutoplayStates.remove(partyUuid);
+        sessionContexts.remove(partyUuid);
     }
 
     private void loadConfiguredLineages() {

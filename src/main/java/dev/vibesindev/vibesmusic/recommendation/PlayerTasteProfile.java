@@ -155,8 +155,15 @@ public final class PlayerTasteProfile {
 
     private volatile long lastSyncTimestamp = 0;
 
+    private final List<PlayerTasteProfile> sourceProfiles;
+
     public PlayerTasteProfile(UUID playerUuid) {
+        this(playerUuid, Collections.emptyList());
+    }
+
+    public PlayerTasteProfile(UUID playerUuid, List<PlayerTasteProfile> sourceProfiles) {
         this.playerUuid = playerUuid;
+        this.sourceProfiles = (sourceProfiles != null) ? List.copyOf(sourceProfiles) : Collections.emptyList();
     }
 
     public UUID getPlayerUuid() {
@@ -452,6 +459,11 @@ public final class PlayerTasteProfile {
         if (dynamicMatches != null) {
             result.addAll(dynamicMatches);
         }
+        if (sourceProfiles != null && !sourceProfiles.isEmpty()) {
+            for (PlayerTasteProfile sp : sourceProfiles) {
+                result.addAll(sp.getConnectedArtists(artist));
+            }
+        }
         return result;
     }
 
@@ -668,8 +680,10 @@ public final class PlayerTasteProfile {
      * Computes the centroid taste vector combining multiple players' profiles into a unified party blend.
      */
     public static PlayerTasteProfile blend(List<PlayerTasteProfile> profiles) {
-        PlayerTasteProfile blend = new PlayerTasteProfile(UUID.randomUUID());
-        if (profiles == null || profiles.isEmpty()) return blend;
+        if (profiles == null || profiles.isEmpty()) {
+            return new PlayerTasteProfile(UUID.randomUUID());
+        }
+        PlayerTasteProfile blend = new PlayerTasteProfile(UUID.randomUUID(), profiles);
 
         int n = profiles.size();
 
@@ -695,12 +709,42 @@ public final class PlayerTasteProfile {
             }
         }
 
-        // 3. Merge fatigue histories so nobody hears their recent songs
+        // 3. Merge fatigue histories: deduplicate by composition key and sort by playedAt ascending
+        Map<String, FatigueEntry> latestFatigueByComp = new java.util.HashMap<>();
         for (PlayerTasteProfile p : profiles) {
             synchronized (p) {
                 for (FatigueEntry fe : p.fatigueHistory) {
-                    blend.fatigueHistory.add(fe);
+                    if (fe == null) continue;
+                    String compKey = RecordingIdentity.compositionTitleKey(fe.title(), fe.artist());
+                    if (compKey.isEmpty()) {
+                        compKey = (fe.trackId() != null) ? fe.trackId() : (fe.artist() + ":" + fe.title());
+                    }
+                    FatigueEntry existing = latestFatigueByComp.get(compKey);
+                    if (existing == null || fe.playedAt() > existing.playedAt()) {
+                        latestFatigueByComp.put(compKey, fe);
+                    }
                 }
+            }
+        }
+
+        List<FatigueEntry> sortedFatigue = new ArrayList<>(latestFatigueByComp.values());
+        sortedFatigue.sort(java.util.Comparator.comparingLong(FatigueEntry::playedAt));
+
+        // Keep last 50
+        if (sortedFatigue.size() > 50) {
+            sortedFatigue = sortedFatigue.subList(sortedFatigue.size() - 50, sortedFatigue.size());
+        }
+        for (FatigueEntry fe : sortedFatigue) {
+            blend.fatigueHistory.add(fe);
+        }
+
+        // Rebuild recentArtists from the last 4 plays across the merged list
+        int recentStart = Math.max(0, sortedFatigue.size() - 4);
+        for (int i = recentStart; i < sortedFatigue.size(); i++) {
+            FatigueEntry fe = sortedFatigue.get(i);
+            String norm = ArtistNames.normalize(fe.artist());
+            if (!norm.isEmpty() && !norm.equalsIgnoreCase("unknown")) {
+                blend.recentArtists.add(norm);
             }
         }
 
@@ -713,7 +757,16 @@ public final class PlayerTasteProfile {
             }
         }
 
-        // 5. Merge dynamic lineage across party members
+        // 5. Merge custom track cooldowns across all party members
+        for (PlayerTasteProfile p : profiles) {
+            for (Map.Entry<String, Long> entry : p.customTrackCooldowns.entrySet()) {
+                if (System.currentTimeMillis() < entry.getValue()) {
+                    blend.customTrackCooldowns.merge(entry.getKey(), entry.getValue(), Math::max);
+                }
+            }
+        }
+
+        // 6. Merge dynamic lineage across party members
         for (PlayerTasteProfile p : profiles) {
             for (Map.Entry<String, Set<String>> entry : p.dynamicLineage.entrySet()) {
                 blend.dynamicLineage.computeIfAbsent(entry.getKey(), k -> ConcurrentHashMap.newKeySet()).addAll(entry.getValue());

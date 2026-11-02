@@ -1,5 +1,5 @@
 name: VibesInDev
-version: 0.6.0
+version: '${project.version}'
 main: dev.vibesindev.vibesmusic.VibesInDevPlugin
 api-version: '26.3'
 author: Redbeastsam

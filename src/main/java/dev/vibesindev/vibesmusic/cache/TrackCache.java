@@ -1,5 +1,7 @@
 package dev.vibesindev.vibesmusic.cache;
 
+import java.util.concurrent.CompletableFuture;
+
 import dev.vibesindev.vibesmusic.VibesInDevPlugin;
 import dev.vibesindev.vibesmusic.model.Track;
 
@@ -113,6 +115,42 @@ public final class TrackCache {
                     "dislikes_json TEXT, " +
                     "lineage_json TEXT, " +
                     "last_sync INTEGER" +
+                    ")");
+            stmt.execute("CREATE TABLE IF NOT EXISTS rec_impressions (" +
+                    "impression_id TEXT PRIMARY KEY, " +
+                    "ts INTEGER NOT NULL, " +
+                    "player_uuid TEXT NOT NULL, " +
+                    "party_uuid TEXT, " +
+                    "seed_track_id TEXT, " +
+                    "engine_version TEXT NOT NULL, " +
+                    "model_version TEXT, " +
+                    "requested_mode TEXT, " +
+                    "effective_mode TEXT, " +
+                    "mode_probability REAL, " +
+                    "mode_fallbacks_json TEXT, " +
+                    "relaxation_level INTEGER DEFAULT 0, " +
+                    "raw_candidates INTEGER, " +
+                    "eligible_candidates INTEGER, " +
+                    "rejection_counts_json TEXT, " +
+                    "provider_status_json TEXT, " +
+                    "latency_ms INTEGER, " +
+                    "selected_track_id TEXT, " +
+                    "completion REAL, " +
+                    "outcome TEXT" +
+                    ")");
+            stmt.execute("CREATE INDEX IF NOT EXISTS idx_rec_impr_player_ts ON rec_impressions(player_uuid, ts);");
+            stmt.execute("CREATE TABLE IF NOT EXISTS rec_candidates (" +
+                    "impression_id TEXT NOT NULL, " +
+                    "track_id TEXT NOT NULL, " +
+                    "rank INTEGER, " +
+                    "source TEXT, " +
+                    "score REAL, " +
+                    "heuristic_score REAL, " +
+                    "learned_score REAL, " +
+                    "selection_probability REAL, " +
+                    "selected INTEGER NOT NULL DEFAULT 0, " +
+                    "features_json TEXT, " +
+                    "PRIMARY KEY (impression_id, track_id)" +
                     ")");
 
             // Schema migrations for pre-existing tables
@@ -846,5 +884,146 @@ public final class TrackCache {
             plugin.getLogger().warning("[VibesInDev] Error loading fatigue history: " + e.getMessage());
         }
         return list;
+    }
+
+    // =======================================================
+    // RECOMMENDATION TELEMETRY (Phase 0 / Phase 5.1)
+    // =======================================================
+
+    public record CandidateTelemetry(
+            String trackId,
+            int rank,
+            String source,
+            double score,
+            double heuristicScore,
+            Double learnedScore,
+            double selectionProbability,
+            boolean selected,
+            String featuresJson
+    ) {}
+
+    public void logRecImpression(
+            String impressionId,
+            long ts,
+            UUID playerUuid,
+            UUID partyUuid,
+            String seedTrackId,
+            String engineVersion,
+            String modelVersion,
+            String requestedMode,
+            String effectiveMode,
+            double modeProbability,
+            String modeFallbacksJson,
+            int relaxationLevel,
+            int rawCandidates,
+            int eligibleCandidates,
+            String rejectionCountsJson,
+            String providerStatusJson,
+            long latencyMs,
+            String selectedTrackId,
+            List<CandidateTelemetry> candidates
+    ) {
+        CompletableFuture.runAsync(() -> {
+            String insertImpression = "INSERT INTO rec_impressions (" +
+                    "impression_id, ts, player_uuid, party_uuid, seed_track_id, engine_version, model_version, " +
+                    "requested_mode, effective_mode, mode_probability, mode_fallbacks_json, relaxation_level, " +
+                    "raw_candidates, eligible_candidates, rejection_counts_json, provider_status_json, latency_ms, " +
+                    "selected_track_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+            String insertCandidate = "INSERT INTO rec_candidates (" +
+                    "impression_id, track_id, rank, source, score, heuristic_score, learned_score, " +
+                    "selection_probability, selected, features_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+
+            try (Connection conn = getConnection()) {
+                conn.setAutoCommit(false);
+                try (PreparedStatement ps = conn.prepareStatement(insertImpression)) {
+                    ps.setString(1, impressionId);
+                    ps.setLong(2, ts);
+                    ps.setString(3, playerUuid != null ? playerUuid.toString() : "");
+                    ps.setString(4, partyUuid != null ? partyUuid.toString() : null);
+                    ps.setString(5, seedTrackId);
+                    ps.setString(6, engineVersion != null ? engineVersion : "v1");
+                    ps.setString(7, modelVersion);
+                    ps.setString(8, requestedMode);
+                    ps.setString(9, effectiveMode);
+                    ps.setDouble(10, modeProbability);
+                    ps.setString(11, modeFallbacksJson);
+                    ps.setInt(12, relaxationLevel);
+                    ps.setInt(13, rawCandidates);
+                    ps.setInt(14, eligibleCandidates);
+                    ps.setString(15, rejectionCountsJson);
+                    ps.setString(16, providerStatusJson);
+                    ps.setLong(17, latencyMs);
+                    ps.setString(18, selectedTrackId);
+                    ps.executeUpdate();
+                }
+
+                if (candidates != null && !candidates.isEmpty()) {
+                    try (PreparedStatement ps = conn.prepareStatement(insertCandidate)) {
+                        for (CandidateTelemetry c : candidates) {
+                            ps.setString(1, impressionId);
+                            ps.setString(2, c.trackId());
+                            ps.setInt(3, c.rank());
+                            ps.setString(4, c.source());
+                            ps.setDouble(5, c.score());
+                            ps.setDouble(6, c.heuristicScore());
+                            if (c.learnedScore() != null) {
+                                ps.setDouble(7, c.learnedScore());
+                            } else {
+                                ps.setNull(7, java.sql.Types.REAL);
+                            }
+                            ps.setDouble(8, c.selectionProbability());
+                            ps.setInt(9, c.selected() ? 1 : 0);
+                            ps.setString(10, c.featuresJson());
+                            ps.addBatch();
+                        }
+                        ps.executeBatch();
+                    }
+                }
+                conn.commit();
+            } catch (SQLException e) {
+                if (plugin != null && plugin.getLogger() != null) {
+                    plugin.getLogger().warning("[VibesInDev] Error logging recommendation telemetry: " + e.getMessage());
+                }
+            }
+        });
+    }
+
+    public void updateRecImpressionOutcome(String impressionId, double completion, String outcome) {
+        if (impressionId == null || impressionId.isBlank()) return;
+        CompletableFuture.runAsync(() -> {
+            String sql = "UPDATE rec_impressions SET completion = ?, outcome = ? WHERE impression_id = ?";
+            try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setDouble(1, completion);
+                ps.setString(2, outcome);
+                ps.setString(3, impressionId);
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                if (plugin != null && plugin.getLogger() != null) {
+                    plugin.getLogger().warning("[VibesInDev] Error updating recommendation outcome: " + e.getMessage());
+                }
+            }
+        });
+    }
+
+    public void pruneRecTelemetry(int retentionDays) {
+        if (retentionDays <= 0) return;
+        CompletableFuture.runAsync(() -> {
+            long cutoff = System.currentTimeMillis() - (retentionDays * 86_400_000L);
+            String deleteImpr = "DELETE FROM rec_impressions WHERE ts < ?";
+            String deleteCand = "DELETE FROM rec_candidates WHERE impression_id NOT IN (SELECT impression_id FROM rec_impressions)";
+            try (Connection conn = getConnection()) {
+                try (PreparedStatement ps = conn.prepareStatement(deleteImpr)) {
+                    ps.setLong(1, cutoff);
+                    ps.executeUpdate();
+                }
+                try (Statement stmt = conn.createStatement()) {
+                    stmt.execute(deleteCand);
+                }
+            } catch (SQLException e) {
+                if (plugin != null && plugin.getLogger() != null) {
+                    plugin.getLogger().warning("[VibesInDev] Error pruning recommendation telemetry: " + e.getMessage());
+                }
+            }
+        });
     }
 }

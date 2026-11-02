@@ -246,17 +246,17 @@ public final class RecommendationEngine {
      * Evaluates every candidate against the formula:
      * Score = 0.35 * GenreMatch + 0.30 * ArtistAffinity + 0.20 * Continuity + 0.15 * Discovery - Fatigue + CacheBonus
      */
-    private Track scoreAndPickBest(
+    Track scoreAndPickBest(
             List<RecommendationCandidate> candidates,
             Track seed,
             PlayerTasteProfile profile
     ) {
-        int cooldownTracks = plugin.getConfig().getInt("recommendations.cooldown-tracks", 20);
-        long cooldownMs = plugin.getConfig().getLong("recommendations.cooldown-minutes", 45) * 60_000L;
-        long minDur = plugin.getConfig().getLong("recommendations.min-duration-seconds", 60);
-        long maxDur = plugin.getConfig().getLong("recommendations.max-duration-seconds", 600);
-        double explorationRatio = plugin.getConfig().getDouble("recommendations.exploration-ratio", 0.20);
-        double cacheBonusValue = plugin.getConfig().getDouble("recommendations.cache-bonus", 0.05);
+        int cooldownTracks = plugin != null && plugin.getConfig() != null ? plugin.getConfig().getInt("recommendations.cooldown-tracks", 20) : 20;
+        long cooldownMs = (plugin != null && plugin.getConfig() != null ? plugin.getConfig().getLong("recommendations.cooldown-minutes", 45) : 45) * 60_000L;
+        long minDur = plugin != null && plugin.getConfig() != null ? plugin.getConfig().getLong("recommendations.min-duration-seconds", 60) : 60;
+        long maxDur = plugin != null && plugin.getConfig() != null ? plugin.getConfig().getLong("recommendations.max-duration-seconds", 600) : 600;
+        double explorationRatio = plugin != null && plugin.getConfig() != null ? plugin.getConfig().getDouble("recommendations.exploration-ratio", 0.20) : 0.20;
+        double cacheBonusValue = plugin != null && plugin.getConfig() != null ? plugin.getConfig().getDouble("recommendations.cache-bonus", 0.05) : 0.05;
 
         boolean explore = RANDOM.nextDouble() < explorationRatio;
 

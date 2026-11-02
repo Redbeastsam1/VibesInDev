@@ -61,42 +61,23 @@ public final class PlayerTasteProfile {
     // CANONICAL TITLE MATCHING & REMIX/SLOWED DEDUPLICATION
     // =========================================================
 
+    @Deprecated
     public static String canonicalizeTitle(String title, String artist) {
-        if (title == null) return "";
-        String s = title.toLowerCase(Locale.ROOT).trim();
-        if (artist != null && !artist.isBlank()) {
-            String a = artist.toLowerCase(Locale.ROOT).trim();
-            if (s.startsWith(a + " - ") || s.startsWith(a + " – ") || s.startsWith(a + ": ")) {
-                s = s.substring(a.length() + 3).trim();
-            }
-        }
-        // Remove parenthesized or bracketed metadata: (Slowed), [Official Video], (feat. ...), (Single 2025)
-        s = s.replaceAll("\\s*\\([^)]*\\)", "").replaceAll("\\s*\\[[^]]*\\]", "");
-        // Remove common version keywords outside brackets
-        s = s.replaceAll("(?i)\\b(slowed\\s*\\+?\\s*reverb|slowed|reverb|sped\\s*up|speed\\s*up|nightcore|remix|official\\s*video|official\\s*audio|lyric\\s*video|visualizer|single\\s*\\d{4}|feat\\.?.*|ft\\.?.*)\\b", "");
-        // Remove non-alphanumeric characters
-        s = s.replaceAll("[^a-z0-9\\s]", " ");
-        // Collapse spaces
-        s = s.replaceAll("\\s+", " ").trim();
-        return s;
+        return RecordingIdentity.compositionTitleKey(title, artist);
     }
 
     public static boolean isSameSongOrRemix(Track a, Track b) {
         if (a == null || b == null) return false;
-        if (a.id() != null && b.id() != null && a.id().equalsIgnoreCase(b.id())) {
-            return true;
-        }
-        String canA = canonicalizeTitle(a.title(), a.artist());
-        String canB = canonicalizeTitle(b.title(), b.artist());
-        if (!canA.isEmpty() && canA.equals(canB)) {
-            return true;
-        }
-        if (!canA.isEmpty() && !canB.isEmpty() && (canA.contains(canB) || canB.contains(canA))) {
-            if (ArtistNames.sameArtist(a.artist(), b.artist())) {
+        if (RecordingIdentity.sameRecording(a, b)) return true;
+
+        String compA = RecordingIdentity.compositionTitleKey(a.title(), a.artist());
+        String compB = RecordingIdentity.compositionTitleKey(b.title(), b.artist());
+        if (!compA.isEmpty() && compA.equals(compB)) {
+            if (ArtistNames.sameArtist(a.artist(), b.artist()) || compA.length() >= 5) {
                 return true;
             }
         }
-        return false;
+        return RecordingIdentity.relatedRecording(a, b);
     }
 
 
@@ -515,8 +496,7 @@ public final class PlayerTasteProfile {
             }
         }
 
-        String canTitle = canonicalizeTitle(title, artist);
-        String normArtist = artist != null ? artist.toLowerCase(Locale.ROOT).trim() : "";
+        String canTitle = RecordingIdentity.compositionTitleKey(title, artist);
         long cutoff = System.currentTimeMillis() - cooldownMs;
 
         int indexFromEnd = 0;
@@ -526,13 +506,9 @@ public final class PlayerTasteProfile {
             boolean idMatch = trackId != null && trackId.equalsIgnoreCase(entry.trackId());
             boolean titleMatch = false;
             if (!canTitle.isEmpty()) {
-                String entryCan = canonicalizeTitle(entry.title(), entry.artist());
-                if (canTitle.equals(entryCan)) {
+                String entryCan = RecordingIdentity.compositionTitleKey(entry.title(), entry.artist());
+                if (canTitle.equals(entryCan) && (artist == null || entry.artist() == null || ArtistNames.sameArtist(artist, entry.artist()))) {
                     titleMatch = true;
-                } else if ((canTitle.contains(entryCan) || entryCan.contains(canTitle)) && !normArtist.isEmpty()) {
-                    if (ArtistNames.sameArtist(artist, entry.artist())) {
-                        titleMatch = true;
-                    }
                 }
             }
 

@@ -84,7 +84,8 @@ public final class SpotifyClient {
     private final Map<UUID, UserSession> userSessions = new ConcurrentHashMap<>();
 
     private final Map<String, PendingState> pendingStates = new ConcurrentHashMap<>();
-    private final Map<UUID, String> pendingCodeFragments = new ConcurrentHashMap<>();
+    private record PendingFragment(String fragment, long expireTimestamp) {}
+    private final Map<UUID, PendingFragment> pendingCodeFragments = new ConcurrentHashMap<>();
 
     private final File usersDir;
 
@@ -123,6 +124,7 @@ public final class SpotifyClient {
     private final YtDlpManager ytDlp;
 
     private final HttpClient http;
+    private final SpotifyHttp spotifyHttp = new SpotifyHttp();
 
 
 
@@ -225,6 +227,15 @@ public final class SpotifyClient {
     }
 
 
+
+    private static String escapeHtml(String input) {
+        if (input == null) return "";
+        return input.replace("&", "&amp;")
+                    .replace("<", "&lt;")
+                    .replace(">", "&gt;")
+                    .replace("\"", "&quot;")
+                    .replace("'", "&#x27;");
+    }
 
     public boolean isConfigured() {
 
@@ -674,7 +685,7 @@ public final class SpotifyClient {
 
                     int port = redirect.getPort() > 0 ? redirect.getPort() : 8888;
 
-                    callbackServer = HttpServer.create(new InetSocketAddress("0.0.0.0", port), 0);
+                    callbackServer = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
 
                     callbackServer.createContext(redirect.getPath(), exchange -> handleCallback(exchange, state, player));
 
@@ -782,7 +793,7 @@ public final class SpotifyClient {
 
         if (error != null) {
 
-            response = "Spotify authorization failed: " + error;
+            response = "Spotify authorization failed: " + escapeHtml(error);
 
         } else if (code == null || !expectedState.equals(state)) {
 
@@ -896,11 +907,13 @@ public final class SpotifyClient {
 
             String fragment = input.startsWith("append ") ? input.substring(7).trim() : input.substring(1).trim();
 
-            String prev = pendingCodeFragments.get(pId);
+            PendingFragment pf = pendingCodeFragments.get(pId);
 
-            if (prev != null) {
+            if (pf != null) {
 
-                input = prev + fragment;
+                if (System.currentTimeMillis() < pf.expireTimestamp()) {
+                    input = pf.fragment() + fragment;
+                }
 
                 pendingCodeFragments.remove(pId);
 
@@ -995,7 +1008,7 @@ public final class SpotifyClient {
 
                     if (pId != null) {
 
-                        pendingCodeFragments.put(pId, savedInput);
+                        pendingCodeFragments.put(pId, new PendingFragment(savedInput, System.currentTimeMillis() + 600_000L));
 
                     }
 
@@ -1761,6 +1774,47 @@ public final class SpotifyClient {
 
     // =========================================================
 
+    /**
+     * Unified Track parser from Spotify track JsonObject (fixes F15).
+     */
+    public static dev.vibesindev.vibesmusic.model.Track parseTrack(com.google.gson.JsonObject tr) {
+        if (tr == null) return null;
+        String id = tr.has("id") && !tr.get("id").isJsonNull() ? tr.get("id").getAsString() : java.util.UUID.randomUUID().toString();
+        String title = tr.has("name") && !tr.get("name").isJsonNull() ? tr.get("name").getAsString() : "Unknown Title";
+
+        long dur = 0;
+        if (tr.has("duration_ms") && !tr.get("duration_ms").isJsonNull()) {
+            dur = tr.get("duration_ms").getAsLong() / 1000L;
+        }
+
+        String artist = "Unknown";
+        if (tr.has("artists") && tr.get("artists").isJsonArray()) {
+            com.google.gson.JsonArray arr = tr.getAsJsonArray("artists");
+            java.util.List<String> artistNames = new java.util.ArrayList<>();
+            for (com.google.gson.JsonElement aEl : arr) {
+                if (aEl != null && aEl.isJsonObject()) {
+                    com.google.gson.JsonObject aObj = aEl.getAsJsonObject();
+                    if (aObj.has("name") && !aObj.get("name").isJsonNull()) {
+                        artistNames.add(aObj.get("name").getAsString());
+                    }
+                }
+            }
+            if (!artistNames.isEmpty()) {
+                artist = String.join(", ", artistNames);
+            }
+        }
+
+        String sourceUrl = "spotify-lazy:" + artist + " - " + title + "::" + dur;
+        if (tr.has("external_urls") && tr.get("external_urls").isJsonObject()) {
+            com.google.gson.JsonObject ext = tr.getAsJsonObject("external_urls");
+            if (ext.has("spotify") && !ext.get("spotify").isJsonNull()) {
+                sourceUrl = ext.get("spotify").getAsString();
+            }
+        }
+
+        return new dev.vibesindev.vibesmusic.model.Track(id, title, artist, dur, sourceUrl);
+    }
+
     // PER-PLAYER TOKEN & TASTE PROFILE INGESTION
 
     // =========================================================
@@ -1793,7 +1847,8 @@ public final class SpotifyClient {
 
         }
 
-        return getUserToken();
+        // Strict per-player token isolation (fixes F13): NEVER fall back to global server token!
+        return CompletableFuture.completedFuture(null);
 
     }
 
@@ -1886,6 +1941,9 @@ public final class SpotifyClient {
     public CompletableFuture<List<String>> fetchUserTopArtists(UUID playerUuid, String timeRange) {
 
         return getUserToken(playerUuid).thenCompose(token -> {
+            if (token == null) {
+                return CompletableFuture.completedFuture(Collections.<String>emptyList());
+            }
 
             String url = API_URL + "/me/top/artists?time_range=" + enc(timeRange != null ? timeRange : "medium_term") + "&limit=50";
 
@@ -2054,25 +2112,10 @@ public final class SpotifyClient {
                                     for (com.google.gson.JsonElement el : root.getAsJsonArray("tracks")) {
 
                                         if (el.isJsonObject()) {
-
-                                            com.google.gson.JsonObject tr = el.getAsJsonObject();
-
-                                            String id = tr.get("id").getAsString();
-
-                                            String title = tr.get("name").getAsString();
-
-                                            long dur = tr.get("duration_ms").getAsLong() / 1000L;
-
-                                            String artist = "Unknown";
-
-                                            if (tr.has("artists") && tr.get("artists").isJsonArray() && tr.getAsJsonArray("artists").size() > 0) {
-
-                                                artist = tr.getAsJsonArray("artists").get(0).getAsJsonObject().get("name").getAsString();
-
+                                            dev.vibesindev.vibesmusic.model.Track parsed = parseTrack(el.getAsJsonObject());
+                                            if (parsed != null) {
+                                                tracks.add(parsed);
                                             }
-
-                                            tracks.add(new Track(id, title, artist, dur, "spotify-lazy:" + artist + " - " + title + "::" + dur));
-
                                         }
 
                                     }
@@ -2303,21 +2346,7 @@ public final class SpotifyClient {
                         profile.ingestArtistGenres(a.genres());
                     }
 
-                    // Dynamically expand related artists & lineage for top 5 artists (e.g. One Direction -> Harry Styles, Zayn, etc.)
-                    for (int i = 0; i < Math.min(5, st.size()); i++) {
-                        SpotifyArtistSummary seed = st.get(i);
-                        if (!seed.id().isBlank()) {
-                            fetchRelatedArtists(uuid, seed.id()).thenAccept(relatedList -> {
-                                for (SpotifyArtistSummary rel : relatedList) {
-                                    profile.registerLineage(seed.name(), rel.name());
-                                    profile.ingestArtistGenres(rel.genres());
-                                }
-                                if (plugin.recommendations() != null) {
-                                    plugin.recommendations().saveProfile(uuid);
-                                }
-                            });
-                        }
-                    }
+                    // Related artists dynamic expansion removed (fixes F17: deprecated 404 endpoint & stops genre pollution)
 
                     if (plugin.recommendations() != null) {
                         plugin.recommendations().saveProfile(uuid);

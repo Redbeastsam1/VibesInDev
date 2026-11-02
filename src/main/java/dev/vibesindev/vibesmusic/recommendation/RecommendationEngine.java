@@ -759,6 +759,32 @@ public final class RecommendationEngine {
         return Math.max(0.0, Math.min(1.0, 1.0 - maxKnown));
     }
 
+    public static int extractReleaseYear(String text) {
+        if (text == null || text.isBlank()) return 0;
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("\\b(19[5-9]\\d|20[0-2]\\d)\\b").matcher(text);
+        int lastMatch = 0;
+        while (m.find()) {
+            try {
+                int y = Integer.parseInt(m.group(1));
+                if (y >= 1950 && y <= 2030) {
+                    lastMatch = y;
+                }
+            } catch (NumberFormatException ignored) {}
+        }
+        return lastMatch;
+    }
+
+    public static double calculateRecentReleaseScore(int year, int referenceYear) {
+        if (year < 1950 || year > referenceYear + 2) return 0.0;
+        int age = Math.max(0, referenceYear - year);
+        if (age <= 1) return 1.0;
+        if (age <= 2) return 0.85;
+        if (age <= 4) return 0.65;
+        if (age <= 7) return 0.40;
+        if (age <= 10) return 0.20;
+        return 0.05;
+    }
+
     public static double calculateCandidateScore(
             double genreCosine, boolean hasGenre,
             double artistAffinity,
@@ -766,6 +792,32 @@ public final class RecommendationEngine {
             double familiarity,
             double quality,
             double novelty,
+            double[] weights,
+            double minFeatureCoverage,
+            double monopolyMultiplier,
+            boolean cachedLocally,
+            double cacheBonus
+    ) {
+        return calculateCandidateScore(
+                genreCosine, hasGenre,
+                artistAffinity,
+                continuity,
+                familiarity,
+                quality,
+                novelty,
+                0.0, false,
+                weights, minFeatureCoverage, monopolyMultiplier, cachedLocally, cacheBonus
+        );
+    }
+
+    public static double calculateCandidateScore(
+            double genreCosine, boolean hasGenre,
+            double artistAffinity,
+            double continuity,
+            double familiarity,
+            double quality,
+            double novelty,
+            double recentRelease, boolean hasRecentRelease,
             double[] weights,
             double minFeatureCoverage,
             double monopolyMultiplier,
@@ -810,8 +862,14 @@ public final class RecommendationEngine {
             weightedSum += weights[5] * Math.max(0.0, Math.min(1.0, novelty));
             availableCount++;
         }
+        if (hasRecentRelease && weights.length > 6 && weights[6] > 0.0) {
+            availableWeight += weights[6];
+            weightedSum += weights[6] * Math.max(0.0, Math.min(1.0, recentRelease));
+            availableCount++;
+        }
 
-        double totalConfiguredWeight = weights[0] + weights[1] + weights[2] + weights[3] + weights[4] + weights[5];
+        double totalConfiguredWeight = 0.0;
+        for (double w : weights) totalConfiguredWeight += w;
         if (totalConfiguredWeight <= 0.0) totalConfiguredWeight = 1.0;
         double featureCoverage = availableWeight / totalConfiguredWeight;
 
@@ -1075,9 +1133,10 @@ public final class RecommendationEngine {
 
                 // Continuity
                 double continuity;
+                int candidateYear = extractReleaseYear(t.title());
                 if (sessionContext != null) {
                     boolean fromRadio = (c.source() == RecommendationCandidate.Source.YOUTUBE_RADIO);
-                    continuity = sessionContext.calculateContinuity(t, candidateGenres, 0, seed, profile, fromRadio);
+                    continuity = sessionContext.calculateContinuity(t, candidateGenres, candidateYear, seed, profile, fromRadio);
                 } else {
                     continuity = 0.40;
                     if (seed != null) {
@@ -1179,16 +1238,24 @@ public final class RecommendationEngine {
 
         List<RecommendationCandidate> scored = new ArrayList<>();
         for (CandidateEvaluation ev : activePool) {
+            double effectiveNovelty = ev.novelty;
+            int candYear = extractReleaseYear(ev.candidate.track().title());
+            boolean hasRecent = candYear >= 1950;
+            double recentScore = hasRecent ? calculateRecentReleaseScore(candYear, 2026) : 0.0;
+            if (hasRecent && effectiveMode == RecommendationMode.EXPLORE) {
+                // Boost novelty in EXPLORE mode with recent release feature (Task 4.3)
+                effectiveNovelty = (ev.novelty * 0.80) + (recentScore * 0.20);
+            }
             double score = calculateCandidateScore(
                     ev.genreCosine, ev.hasGenre,
-                    ev.artistAffinity, ev.continuity, ev.familiarity, ev.quality, ev.novelty,
+                    ev.artistAffinity, ev.continuity, ev.familiarity, ev.quality, effectiveNovelty,
                     weights, minFeatureCoverage, ev.monopolyMultiplier, ev.candidate.cachedLocally(), cacheBonusValue
             );
             if (score >= 0.0) {
                 String reason = buildExplainabilityReason(
                         effectiveMode, ev.candidate.source(),
                         ev.genreCosine, ev.hasGenre,
-                        ev.artistAffinity, ev.continuity, ev.familiarity, ev.quality, ev.novelty,
+                        ev.artistAffinity, ev.continuity, ev.familiarity, ev.quality, effectiveNovelty,
                         weights
                 );
                 scored.add(new RecommendationCandidate(

@@ -74,7 +74,22 @@ public class PlayerTasteProfileTest {
 
 
     @Test
+    public void testArtistMatchingTier2AndSubstringFalsePositivePrevention() {
+        profile.ingestSpotifyArtists(List.of("Daft Punk", "Sia"), null);
 
+        // Exact match
+        double daftPunkAffinity = profile.getArtistAffinity("Daft Punk");
+        assertTrue(daftPunkAffinity > 0.0);
+
+        // Featuring / collaboration match inherits 0.8x
+        double collabAffinity = profile.getArtistAffinity("Daft Punk feat. Pharrell");
+        assertEquals(daftPunkAffinity * 0.8, collabAffinity, 0.001);
+
+        // "Asia" contains "sia" as a substring, but must NOT match Sia (fixes F1)
+        assertEquals(0.0, profile.getArtistAffinity("Asia"));
+    }
+
+    @Test
     public void testFatigueBlacklist() {
 
         Track t1 = new Track("track_1", "Song 1", "Artist 1", 200, "url1");

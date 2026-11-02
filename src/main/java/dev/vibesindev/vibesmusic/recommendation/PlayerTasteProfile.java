@@ -92,9 +92,7 @@ public final class PlayerTasteProfile {
             return true;
         }
         if (!canA.isEmpty() && !canB.isEmpty() && (canA.contains(canB) || canB.contains(canA))) {
-            String artA = a.artist() != null ? a.artist().toLowerCase(Locale.ROOT).trim() : "";
-            String artB = b.artist() != null ? b.artist().toLowerCase(Locale.ROOT).trim() : "";
-            if (artA.contains(artB) || artB.contains(artA)) {
+            if (ArtistNames.sameArtist(a.artist(), b.artist())) {
                 return true;
             }
         }
@@ -403,7 +401,7 @@ public final class PlayerTasteProfile {
      */
     public Set<String> getConnectedArtists(String artist) {
         if (artist == null || artist.isBlank()) return Collections.emptySet();
-        String norm = artist.toLowerCase(Locale.ROOT).trim();
+        String norm = ArtistNames.normalize(artist);
 
         Set<String> result = new HashSet<>();
         Set<String> staticMatches = STATIC_LINEAGE_GRAPH.get(norm);
@@ -429,15 +427,20 @@ public final class PlayerTasteProfile {
         if (artist == null || artist.isBlank()) return 0.0;
         String key = artist.toLowerCase(Locale.ROOT).trim();
 
+        String normKey = ArtistNames.normalize(key);
         // 1. Exact match
-        Double val = artistAffinities.get(key);
+        Double val = artistAffinities.get(normKey);
+        if (val == null) {
+            val = artistAffinities.get(key);
+        }
         if (val != null) return val;
 
-        // 2. Substring / featuring match (e.g. "Daft Punk ft. Pharrell" contains "Daft Punk")
+        // 2. Token / featuring match (fixes F1 short name false positives)
         double highestSub = 0.0;
         for (Map.Entry<String, Double> e : artistAffinities.entrySet()) {
-            if (key.contains(e.getKey()) || e.getKey().contains(key)) {
-                double score = e.getValue() * 0.8;
+            double matchFactor = ArtistNames.exactOrCollab(key, e.getKey());
+            if (matchFactor > 0.0) {
+                double score = e.getValue() * matchFactor;
                 if (score > highestSub) highestSub = score;
             }
         }
@@ -527,8 +530,7 @@ public final class PlayerTasteProfile {
                 if (canTitle.equals(entryCan)) {
                     titleMatch = true;
                 } else if ((canTitle.contains(entryCan) || entryCan.contains(canTitle)) && !normArtist.isEmpty()) {
-                    String entryArt = entry.artist() != null ? entry.artist().toLowerCase(Locale.ROOT).trim() : "";
-                    if (normArtist.contains(entryArt) || entryArt.contains(normArtist)) {
+                    if (ArtistNames.sameArtist(artist, entry.artist())) {
                         titleMatch = true;
                     }
                 }
@@ -558,9 +560,8 @@ public final class PlayerTasteProfile {
      */
     public synchronized boolean isRecentArtist(String artist) {
         if (artist == null || artist.isBlank()) return false;
-        String key = artist.toLowerCase(Locale.ROOT).trim();
         for (String recent : recentArtists) {
-            if (recent.equals(key) || recent.contains(key) || key.contains(recent)) {
+            if (ArtistNames.sameArtist(artist, recent)) {
                 return true;
             }
         }

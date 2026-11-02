@@ -1209,6 +1209,19 @@ public final class PlayerTasteProfile {
         return Collections.unmodifiableMap(effective);
     }
 
+    /**
+     * Returns the player's top artists sorted by effective affinity descending.
+     */
+    public List<String> getTopArtists(int limit) {
+        Map<String, Double> affs = getArtistAffinities();
+        if (affs.isEmpty()) return Collections.emptyList();
+        return affs.entrySet().stream()
+                .sorted(Map.Entry.<String, Double>comparingByValue().reversed())
+                .limit(limit > 0 ? limit : 50)
+                .map(Map.Entry::getKey)
+                .toList();
+    }
+
     public Map<String, Long> getDislikedTracks() {
         return Collections.unmodifiableMap(dislikedTracks);
     }

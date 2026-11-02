@@ -2395,6 +2395,9 @@ public final class SpotifyClient {
 
                     if (plugin.recommendations() != null) {
                         plugin.recommendations().saveProfile(uuid);
+                        if (plugin.recommendations().genreResolver() != null) {
+                            plugin.recommendations().genreResolver().warmTopArtists(profile, 50);
+                        }
                     }
 
                     plugin.getLogger().info("[VibesInDev] Ingested " + (st.size() + mt.size()) + " Spotify top artists and expanded related artist lineage for " + player.getName() + ".");

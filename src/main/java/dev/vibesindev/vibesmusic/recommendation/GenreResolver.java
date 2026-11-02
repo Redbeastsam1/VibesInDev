@@ -159,6 +159,46 @@ public class GenreResolver {
         return future;
     }
 
+    /**
+     * Background warmer that tops up cached genres via GenreResolver for the player's top artists (Task 4.2).
+     * Non-blocking and async; ignores artists whose genres are already cached.
+     *
+     * @param profile player taste profile
+     * @param limit maximum number of top artists to check (default 50)
+     * @return CompletableFuture completing with count of successfully warmed artists
+     */
+    public CompletableFuture<Integer> warmTopArtists(PlayerTasteProfile profile, int limit) {
+        if (profile == null) return CompletableFuture.completedFuture(0);
+        List<String> topArtists = profile.getTopArtists(limit > 0 ? limit : 50);
+        if (topArtists.isEmpty()) return CompletableFuture.completedFuture(0);
+
+        List<String> missing = new ArrayList<>();
+        for (String artist : topArtists) {
+            if (getCachedGenres(artist).isEmpty()) {
+                missing.add(artist);
+            }
+        }
+        if (missing.isEmpty()) {
+            return CompletableFuture.completedFuture(0);
+        }
+
+        return CompletableFuture.supplyAsync(() -> {
+            int warmed = 0;
+            for (String artist : missing) {
+                try {
+                    List<String> genres = genresFor(artist).join();
+                    if (genres != null && !genres.isEmpty()) {
+                        warmed++;
+                    }
+                } catch (Exception ignored) {}
+            }
+            if (plugin != null) {
+                plugin.getLogger().fine("[VibesInDev] Background genre warmer topped up " + warmed + " / " + missing.size() + " artists.");
+            }
+            return warmed;
+        }, executor);
+    }
+
     private CompletableFuture<List<String>> resolveLadderAsync(String artistNorm) {
         // Step 1: Spotify Web API
         return lookupSpotify(artistNorm).thenCompose(spotifyGenres -> {

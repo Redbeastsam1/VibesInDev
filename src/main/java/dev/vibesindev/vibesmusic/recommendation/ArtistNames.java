@@ -161,6 +161,10 @@ public final class ArtistNames {
         return result;
     }
 
+    public static List<String> splitTokens(String raw) {
+        return new ArrayList<>(tokens(raw));
+    }
+
     /**
      * Returns true if either full normalized string matches, or if the token sets intersect.
      */

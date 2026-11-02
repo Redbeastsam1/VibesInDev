@@ -4,6 +4,7 @@ import dev.vibesindev.vibesmusic.model.Track;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.HashSet;
@@ -49,6 +50,15 @@ public final class PlayerTasteProfile {
 
     /** Disliked tracks under 7-day soft cooldown (trackId -> expireTimestamp). */
     private final Map<String, Long> dislikedTracks = new ConcurrentHashMap<>();
+
+    /** Inverted token index and lookup cache for artist affinity (fixes F7). */
+    private final Map<String, Double> affinityLookupCache = new ConcurrentHashMap<>();
+    private volatile Map<String, List<String>> tokenIndex;
+
+    public void invalidateAffinityCache() {
+        affinityLookupCache.clear();
+        tokenIndex = null;
+    }
 
     /** Custom track cooldowns for skipped tracks (trackId / compositionKey -> expiry timestamp). */
     private final Map<String, Long> customTrackCooldowns = new ConcurrentHashMap<>();
@@ -317,6 +327,7 @@ public final class PlayerTasteProfile {
             double updated = current + gain * (1.0 - current);
             return Math.min(1.0, Math.max(0.01, updated));
         });
+        invalidateAffinityCache();
     }
 
     private void downweightArtist(String artist, double factor) {
@@ -325,6 +336,7 @@ public final class PlayerTasteProfile {
             double ov = oldVal.doubleValue();
             return Math.max(0.01, ov * (1.0 - factor));
         });
+        invalidateAffinityCache();
     }
 
     // =========================================================
@@ -393,29 +405,28 @@ public final class PlayerTasteProfile {
         normalizeGenres();
     }
 
-    private void normalizeAffinities() {
+    private synchronized void normalizeAffinities() {
         if (artistAffinities.isEmpty()) return;
         double max = 0.0;
         for (double val : artistAffinities.values()) {
             if (val > max) max = val;
         }
         if (max > 1.0) {
-            for (Map.Entry<String, Double> e : artistAffinities.entrySet()) {
-                e.setValue(e.getValue() / max);
-            }
+            final double m = max;
+            artistAffinities.replaceAll((k, v) -> v / m);
         }
+        invalidateAffinityCache();
     }
 
-    private void normalizeGenres() {
+    private synchronized void normalizeGenres() {
         if (genreDistribution.isEmpty()) return;
         double sum = 0.0;
         for (double val : genreDistribution.values()) {
             sum += val;
         }
         if (sum > 0) {
-            for (Map.Entry<String, Double> e : genreDistribution.entrySet()) {
-                e.setValue(e.getValue() / sum);
-            }
+            final double s = sum;
+            genreDistribution.replaceAll((k, v) -> v / s);
         }
     }
 
@@ -441,6 +452,7 @@ public final class PlayerTasteProfile {
 
         dynamicLineage.computeIfAbsent(aNorm, k -> ConcurrentHashMap.newKeySet()).add(bNorm);
         dynamicLineage.computeIfAbsent(bNorm, k -> ConcurrentHashMap.newKeySet()).add(aNorm);
+        invalidateAffinityCache();
     }
 
     /**
@@ -478,8 +490,17 @@ public final class PlayerTasteProfile {
     public double getArtistAffinity(String artist) {
         if (artist == null || artist.isBlank()) return 0.0;
         String key = artist.toLowerCase(Locale.ROOT).trim();
-
         String normKey = ArtistNames.normalize(key);
+
+        Double cached = affinityLookupCache.get(normKey);
+        if (cached != null) return cached;
+
+        double calculated = calculateArtistAffinity(key, normKey);
+        affinityLookupCache.put(normKey, calculated);
+        return calculated;
+    }
+
+    private double calculateArtistAffinity(String key, String normKey) {
         // 1. Exact match
         Double val = artistAffinities.get(normKey);
         if (val == null) {
@@ -487,13 +508,28 @@ public final class PlayerTasteProfile {
         }
         if (val != null) return val;
 
-        // 2. Token / featuring match (fixes F1 short name false positives)
+        // 2. Token index lookup (fixes F7: O(1) candidate lookup instead of linear scan across all affinities)
         double highestSub = 0.0;
-        for (Map.Entry<String, Double> e : artistAffinities.entrySet()) {
-            double matchFactor = ArtistNames.exactOrCollab(key, e.getKey());
-            if (matchFactor > 0.0) {
-                double score = e.getValue() * matchFactor;
-                if (score > highestSub) highestSub = score;
+        Map<String, List<String>> idx = getOrCreateTokenIndex();
+        List<String> queryTokens = ArtistNames.splitTokens(normKey);
+        Set<String> candidateArtists = new HashSet<>();
+        for (String qToken : queryTokens) {
+            if (qToken.length() >= 2) {
+                List<String> matches = idx.get(qToken);
+                if (matches != null) {
+                    candidateArtists.addAll(matches);
+                }
+            }
+        }
+
+        for (String cand : candidateArtists) {
+            Double aff = artistAffinities.get(cand);
+            if (aff != null) {
+                double matchFactor = ArtistNames.exactOrCollab(normKey, cand);
+                if (matchFactor > 0.0) {
+                    double score = aff * matchFactor;
+                    if (score > highestSub) highestSub = score;
+                }
             }
         }
         if (highestSub > 0.0) {
@@ -501,7 +537,6 @@ public final class PlayerTasteProfile {
         }
 
         // 3. Lineage / Band Member / Related Artist match
-        // E.g. Player likes "one direction" (1.0 affinity) -> "harry styles" inherits 0.75 affinity!
         double highestLineage = 0.0;
         Set<String> connected = getConnectedArtists(key);
         if (!connected.isEmpty()) {
@@ -517,6 +552,23 @@ public final class PlayerTasteProfile {
         }
 
         return highestLineage;
+    }
+
+    private Map<String, List<String>> getOrCreateTokenIndex() {
+        Map<String, List<String>> idx = tokenIndex;
+        if (idx == null) {
+            Map<String, List<String>> newIdx = new HashMap<>();
+            for (String affArtist : artistAffinities.keySet()) {
+                for (String token : ArtistNames.splitTokens(affArtist)) {
+                    if (token.length() >= 2) {
+                        newIdx.computeIfAbsent(token, k -> new ArrayList<>()).add(affArtist);
+                    }
+                }
+            }
+            tokenIndex = newIdx;
+            return newIdx;
+        }
+        return idx;
     }
 
     /**
@@ -854,6 +906,9 @@ public final class PlayerTasteProfile {
         for (FatigueEntry fe : recentFatigue) {
             if (fe != null) {
                 this.fatigueHistory.add(fe);
+                while (this.fatigueHistory.size() > 50) {
+                    this.fatigueHistory.removeFirst();
+                }
                 if (fe.artist() != null && !fe.artist().isBlank()) {
                     String norm = ArtistNames.normalize(fe.artist());
                     if (!norm.isEmpty() && !norm.equalsIgnoreCase("unknown")) {

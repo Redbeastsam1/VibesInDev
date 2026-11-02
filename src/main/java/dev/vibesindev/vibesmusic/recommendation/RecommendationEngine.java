@@ -287,9 +287,11 @@ public final class RecommendationEngine {
         return CompletableFuture.supplyAsync(() -> {
             List<Track> trending = plugin.cache().getTrendingTracks(10);
             if (trending != null && !trending.isEmpty()) {
+                List<Track> snapshot = new ArrayList<>(trending);
                 int cooldownTracks = plugin.getConfig() != null ? plugin.getConfig().getInt("recommendations.cooldown-tracks", 20) : 20;
                 long cooldownMs = (plugin.getConfig() != null ? plugin.getConfig().getLong("recommendations.cooldown-minutes", 45) : 45) * 60_000L;
-                for (Track t : trending) {
+                for (Track t : snapshot) {
+                    if (t == null) continue;
                     if (seed != null && PlayerTasteProfile.isSameSongOrRemix(t, seed)) {
                         continue;
                     }
@@ -298,7 +300,7 @@ public final class RecommendationEngine {
                     }
                     return t;
                 }
-                return trending.get(0);
+                return snapshot.get(0);
             }
             return null;
         }, providerExecutor);

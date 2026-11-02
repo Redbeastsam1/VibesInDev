@@ -67,7 +67,7 @@ public final class RecommendationManager {
                 }
 
                 // 2. Restore recent fatigue cooldowns from SQLite (within last 45 mins)
-                List<PlayerTasteProfile.FatigueEntry> recentFatigue = plugin.cache().getRecentFatigueHistory(uuid, 20, 45 * 60_000L);
+                List<PlayerTasteProfile.FatigueEntry> recentFatigue = plugin.cache().getRecentFatigueHistory(uuid, 50, 45 * 60_000L);
                 if (recentFatigue != null && !recentFatigue.isEmpty()) {
                     profile.restoreFatigue(recentFatigue);
                 }

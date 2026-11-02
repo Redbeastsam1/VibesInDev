@@ -277,6 +277,9 @@ public final class RecommendationManager {
 
     public void shutdown() {
         saveAll();
+        if (engine != null) {
+            engine.shutdown();
+        }
     }
 
     public void onPlayerQuit(UUID playerUuid) {

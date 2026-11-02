@@ -11,6 +11,12 @@ import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
 
 /**
@@ -28,11 +34,37 @@ import java.util.regex.Pattern;
 public final class RecommendationEngine {
 
     private static final Random RANDOM = new Random();
+    private static final AtomicInteger THREAD_COUNTER = new AtomicInteger();
 
     private final VibesInDevPlugin plugin;
+    private final ExecutorService providerExecutor;
 
     public RecommendationEngine(VibesInDevPlugin plugin) {
         this.plugin = plugin;
+        this.providerExecutor = new ThreadPoolExecutor(
+                2, 8,
+                60L, TimeUnit.SECONDS,
+                new LinkedBlockingQueue<>(32),
+                r -> {
+                    Thread t = new Thread(r, "VibesMusic-RecProvider-" + THREAD_COUNTER.incrementAndGet());
+                    t.setDaemon(true);
+                    return t;
+                },
+                new ThreadPoolExecutor.CallerRunsPolicy()
+        );
+    }
+
+    public void shutdown() {
+        if (providerExecutor != null && !providerExecutor.isShutdown()) {
+            providerExecutor.shutdown();
+            try {
+                if (!providerExecutor.awaitTermination(2, TimeUnit.SECONDS)) {
+                    providerExecutor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                providerExecutor.shutdownNow();
+            }
+        }
     }
 
     /**
@@ -47,24 +79,51 @@ public final class RecommendationEngine {
             return fallbackTrending(seed, profile);
         }
 
-        // 1. Gather candidate tracks from all available streams in parallel
         List<CompletableFuture<List<RecommendationCandidate>>> futures = new ArrayList<>();
 
         // Stream C: YouTube Algorithmic Radio Mix (fast, neural cluster)
-        futures.add(fetchYouTubeRadioCandidates(seed));
+        if (plugin != null && plugin.ytDlp() != null) {
+            futures.add(fetchYouTubeRadioCandidates(seed));
+        }
 
         // Stream D: Local Server Collaborative Filtering (instant SQLite graph)
-        futures.add(fetchCollaborativeCandidates(seed));
+        if (plugin != null && plugin.cache() != null) {
+            futures.add(fetchCollaborativeCandidates(seed));
+        }
 
         // Stream A & B: If Spotify is enabled and configured, query Spotify candidate streams
-        if (plugin.spotify() != null && plugin.spotify().isConfigured()) {
+        if (plugin != null && plugin.spotify() != null && plugin.spotify().isConfigured()) {
             futures.add(fetchSpotifyCandidates(seed, profile));
         }
 
-        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+        return gatherAndPick(futures, seed, profile);
+    }
+
+    /**
+     * Gathers candidates across parallel streams with 3 000 ms per-stream timeout and 6 000 ms total deadline.
+     */
+    public CompletableFuture<Track> gatherAndPick(
+            List<CompletableFuture<List<RecommendationCandidate>>> streamFutures,
+            Track seed,
+            PlayerTasteProfile profile
+    ) {
+        List<CompletableFuture<List<RecommendationCandidate>>> guardedFutures = new ArrayList<>();
+        if (streamFutures != null) {
+            for (CompletableFuture<List<RecommendationCandidate>> f : streamFutures) {
+                if (f != null) {
+                    guardedFutures.add(f.completeOnTimeout(Collections.emptyList(), 3000L, TimeUnit.MILLISECONDS)
+                            .exceptionally(err -> Collections.emptyList()));
+                }
+            }
+        }
+
+        CompletableFuture<Void> allGather = CompletableFuture.allOf(guardedFutures.toArray(new CompletableFuture[0]))
+                .completeOnTimeout(null, 6000L, TimeUnit.MILLISECONDS);
+
+        return allGather
                 .thenApply(ignored -> {
                     List<RecommendationCandidate> allCandidates = new ArrayList<>();
-                    for (CompletableFuture<List<RecommendationCandidate>> f : futures) {
+                    for (CompletableFuture<List<RecommendationCandidate>> f : guardedFutures) {
                         try {
                             List<RecommendationCandidate> candidates = f.getNow(Collections.emptyList());
                             if (candidates != null) {
@@ -79,13 +138,14 @@ public final class RecommendationEngine {
                         return fallbackTrending(seed, profile);
                     }
 
-                    // 2. Score and rank candidates
+                    // Score and rank candidates
                     Track best = scoreAndPickBest(candidates, seed, profile);
                     if (best != null) {
                         return CompletableFuture.completedFuture(best);
                     }
                     return fallbackTrending(seed, profile);
-                });
+                })
+                .exceptionallyCompose(err -> fallbackTrending(seed, profile));
     }
 
     // =========================================================
@@ -149,6 +209,9 @@ public final class RecommendationEngine {
      * Stream D: Collaborative filtering from local server history.
      */
     private CompletableFuture<List<RecommendationCandidate>> fetchCollaborativeCandidates(Track seed) {
+        if (plugin == null || plugin.cache() == null) {
+            return CompletableFuture.completedFuture(Collections.emptyList());
+        }
         return CompletableFuture.supplyAsync(() -> {
             List<RecommendationCandidate> list = new ArrayList<>();
             // "Players who played Artist X also played..."
@@ -163,14 +226,14 @@ public final class RecommendationEngine {
                 }
             }
             return list;
-        }).exceptionally(err -> Collections.emptyList());
+        }, providerExecutor).exceptionally(err -> Collections.emptyList());
     }
 
     /**
      * Streams A & B: Seed artist top tracks & micro-genre clustering via Spotify.
      */
     private CompletableFuture<List<RecommendationCandidate>> fetchSpotifyCandidates(Track seed, PlayerTasteProfile profile) {
-        List<RecommendationCandidate> list = new ArrayList<>();
+        List<RecommendationCandidate> list = new CopyOnWriteArrayList<>();
 
         // Stream A: Same artist catalog
         List<Track> sameArtistTracks = plugin.cache().getTracksByArtist(seed.artist(), 3);
@@ -217,12 +280,15 @@ public final class RecommendationEngine {
     /**
      * Fallback: Surfaces trending / frequently played tracks across the server.
      */
-    private CompletableFuture<Track> fallbackTrending(Track seed, PlayerTasteProfile profile) {
+    public CompletableFuture<Track> fallbackTrending(Track seed, PlayerTasteProfile profile) {
+        if (plugin == null || plugin.cache() == null) {
+            return CompletableFuture.completedFuture(null);
+        }
         return CompletableFuture.supplyAsync(() -> {
             List<Track> trending = plugin.cache().getTrendingTracks(10);
             if (trending != null && !trending.isEmpty()) {
-                int cooldownTracks = plugin.getConfig().getInt("recommendations.cooldown-tracks", 20);
-                long cooldownMs = plugin.getConfig().getLong("recommendations.cooldown-minutes", 45) * 60_000L;
+                int cooldownTracks = plugin.getConfig() != null ? plugin.getConfig().getInt("recommendations.cooldown-tracks", 20) : 20;
+                long cooldownMs = (plugin.getConfig() != null ? plugin.getConfig().getLong("recommendations.cooldown-minutes", 45) : 45) * 60_000L;
                 for (Track t : trending) {
                     if (seed != null && PlayerTasteProfile.isSameSongOrRemix(t, seed)) {
                         continue;
@@ -235,7 +301,7 @@ public final class RecommendationEngine {
                 return trending.get(0);
             }
             return null;
-        });
+        }, providerExecutor);
     }
 
     // =========================================================

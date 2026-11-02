@@ -132,6 +132,9 @@ recommendations:
       novelty: 0.35
   explore-min-continuity: 0.45
   min-feature-coverage: 0.35
+  # MMR diversity and softmax sampling (Task 2.8)
+  mmr-lambda: 0.70
+  softmax-temperature: 0.08
   # External metadata enrichment (optional)
   external:
     lastfm-api-key: ""

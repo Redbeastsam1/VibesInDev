@@ -965,9 +965,38 @@ public final class RecommendationEngine {
             return null;
         }
 
-        // Sort descending by score
-        Collections.sort(scored);
-        return scored.get(0).track();
+        // MMR Diversity and Softmax Selection (Task 2.8)
+        List<Track> lastFive = new ArrayList<>();
+        if (profile != null && profile.getFatigueHistory() != null) {
+            List<PlayerTasteProfile.FatigueEntry> fList = new ArrayList<>(profile.getFatigueHistory());
+            int start = Math.max(0, fList.size() - 5);
+            for (int i = start; i < fList.size(); i++) {
+                PlayerTasteProfile.FatigueEntry fe = fList.get(i);
+                lastFive.add(new Track(fe.trackId(), fe.title(), fe.artist(), 0, ""));
+            }
+        }
+
+        Map<String, List<String>> artistGenreMap = new HashMap<>();
+        if (genreResolver != null) {
+            for (RecommendationCandidate c : scored) {
+                if (c.track() != null && c.track().artist() != null) {
+                    String normA = ArtistNames.normalize(c.track().artist());
+                    artistGenreMap.putIfAbsent(normA, genreResolver.getCachedGenres(c.track().artist()));
+                }
+            }
+        }
+
+        double lambda = plugin != null && plugin.getConfig() != null
+                ? plugin.getConfig().getDouble("recommendations.mmr-lambda", 0.70) : 0.70;
+        double softmaxTemp = plugin != null && plugin.getConfig() != null
+                ? plugin.getConfig().getDouble("recommendations.softmax-temperature", 0.08) : 0.08;
+
+        List<CandidateSelector.MmrCandidate> mmrList = CandidateSelector.greedyMmr(
+                scored, lastFive, artistGenreMap, lambda, 8
+        );
+
+        RecommendationCandidate chosen = CandidateSelector.softmaxSample(mmrList, softmaxTemp, RANDOM);
+        return chosen != null ? chosen.track() : scored.get(0).track();
     }
 
     Track scoreAndPickBestLegacy(
@@ -1054,9 +1083,38 @@ public final class RecommendationEngine {
             return null;
         }
 
-        // Sort descending by score
-        Collections.sort(scored);
-        return scored.get(0).track();
+        // MMR Diversity and Softmax Selection (Task 2.8)
+        List<Track> lastFive = new ArrayList<>();
+        if (profile != null && profile.getFatigueHistory() != null) {
+            List<PlayerTasteProfile.FatigueEntry> fList = new ArrayList<>(profile.getFatigueHistory());
+            int start = Math.max(0, fList.size() - 5);
+            for (int i = start; i < fList.size(); i++) {
+                PlayerTasteProfile.FatigueEntry fe = fList.get(i);
+                lastFive.add(new Track(fe.trackId(), fe.title(), fe.artist(), 0, ""));
+            }
+        }
+
+        Map<String, List<String>> artistGenreMap = new HashMap<>();
+        if (genreResolver != null) {
+            for (RecommendationCandidate c : scored) {
+                if (c.track() != null && c.track().artist() != null) {
+                    String normA = ArtistNames.normalize(c.track().artist());
+                    artistGenreMap.putIfAbsent(normA, genreResolver.getCachedGenres(c.track().artist()));
+                }
+            }
+        }
+
+        double lambda = plugin != null && plugin.getConfig() != null
+                ? plugin.getConfig().getDouble("recommendations.mmr-lambda", 0.70) : 0.70;
+        double softmaxTemp = plugin != null && plugin.getConfig() != null
+                ? plugin.getConfig().getDouble("recommendations.softmax-temperature", 0.08) : 0.08;
+
+        List<CandidateSelector.MmrCandidate> mmrList = CandidateSelector.greedyMmr(
+                scored, lastFive, artistGenreMap, lambda, 8
+        );
+
+        RecommendationCandidate chosen = CandidateSelector.softmaxSample(mmrList, softmaxTemp, RANDOM);
+        return chosen != null ? chosen.track() : scored.get(0).track();
     }
 
     private static String extractYouTubeId(Track track) {

@@ -9,6 +9,7 @@ import org.bukkit.ChatColor;
 import org.bukkit.entity.Player;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -271,15 +272,16 @@ public final class RecommendationManager implements org.bukkit.event.Listener {
     // =========================================================
 
     /**
-     * Predicts the next track to play using the mathematical multi-objective recommendation engine.
+     * Predicts the next ranked list of candidate tracks (up to 3) using multi-objective scoring,
+     * diversity-maximizing greedy MMR, and temperature-weighted softmax selection with relaxation ladder.
      */
-    public CompletableFuture<Track> getOrPredictNext(UUID playerUuid, Track seed) {
+    public CompletableFuture<List<RankedPick>> getOrPredictNextRanked(UUID playerUuid, Track seed) {
         if (playerUuid == null) {
-            return CompletableFuture.completedFuture(null);
+            return CompletableFuture.completedFuture(Collections.emptyList());
         }
 
         // Check if player is in a party: if so, compute Spotify Blend centroid
-        MusicParty party = plugin.parties().getPartyByPlayer(playerUuid);
+        MusicParty party = (plugin.parties() != null) ? plugin.parties().getPartyByPlayer(playerUuid) : null;
         PlayerTasteProfile profile;
 
         if (party != null && party.getMemberCount() > 1) {
@@ -292,7 +294,18 @@ public final class RecommendationManager implements org.bukkit.event.Listener {
             profile = getOrCreateProfile(playerUuid);
         }
 
-        return engine.recommendNext(seed, profile);
+        return engine.recommendNextRanked(seed, profile);
+    }
+
+    /**
+     * Predicts the single highest-scoring next track to play.
+     *
+     * @deprecated Use {@link #getOrPredictNextRanked(UUID, Track)} for ranked fallback support.
+     */
+    @Deprecated
+    public CompletableFuture<Track> getOrPredictNext(UUID playerUuid, Track seed) {
+        return getOrPredictNextRanked(playerUuid, seed)
+                .thenApply(picks -> (picks != null && !picks.isEmpty()) ? picks.get(0).track() : null);
     }
 
     // =========================================================

@@ -135,6 +135,8 @@ recommendations:
   # MMR diversity and softmax sampling (Task 2.8)
   mmr-lambda: 0.70
   softmax-temperature: 0.08
+  # Relaxation ladder (Task 2.9)
+  min-eligible: 3
   # External metadata enrichment (optional)
   external:
     lastfm-api-key: ""

@@ -3,6 +3,7 @@ package dev.vibesindev.vibesmusic.playback;
 import dev.vibesindev.vibesmusic.VibesInDevPlugin;
 import dev.vibesindev.vibesmusic.model.Track;
 import dev.vibesindev.vibesmusic.party.MusicParty;
+import dev.vibesindev.vibesmusic.recommendation.RankedPick;
 import org.bukkit.ChatColor;
 import org.bukkit.entity.Player;
 
@@ -108,11 +109,14 @@ public final class MusicPlaybackManager {
                         prepareTrack(next);
                     } else if (next == null && plugin.recommendations() != null
                             && plugin.recommendations().isPartyAutoplayEnabled(party.getPartyId())) {
-                        plugin.recommendations().getOrPredictNext(party.getOwner(), party.getCurrentTrack())
-                                .thenAccept(predicted -> {
-                                    if (predicted != null && !plugin.cache().hasAudio(predicted.id())
-                                            && !activePreparations.containsKey(predicted.id())) {
-                                        prepareTrack(predicted);
+                        plugin.recommendations().getOrPredictNextRanked(party.getOwner(), party.getCurrentTrack())
+                                .thenAccept(picks -> {
+                                    if (picks != null && !picks.isEmpty()) {
+                                        Track predicted = picks.get(0).track();
+                                        if (predicted != null && !plugin.cache().hasAudio(predicted.id())
+                                                && !activePreparations.containsKey(predicted.id())) {
+                                            prepareTrack(predicted);
+                                        }
                                     }
                                 });
                     }
@@ -149,11 +153,14 @@ public final class MusicPlaybackManager {
                                 prepareTrack(next);
                             } else if (next == null && plugin.recommendations() != null
                                     && plugin.recommendations().isAutoplayEnabled(uuid)) {
-                                plugin.recommendations().getOrPredictNext(uuid, current)
-                                        .thenAccept(predicted -> {
-                                            if (predicted != null && !plugin.cache().hasAudio(predicted.id())
-                                                    && !activePreparations.containsKey(predicted.id())) {
-                                                prepareTrack(predicted);
+                                plugin.recommendations().getOrPredictNextRanked(uuid, current)
+                                        .thenAccept(picks -> {
+                                            if (picks != null && !picks.isEmpty()) {
+                                                Track predicted = picks.get(0).track();
+                                                if (predicted != null && !plugin.cache().hasAudio(predicted.id())
+                                                        && !activePreparations.containsKey(predicted.id())) {
+                                                    prepareTrack(predicted);
+                                                }
                                             }
                                         });
                             }
@@ -476,29 +483,7 @@ public final class MusicPlaybackManager {
                     && current != null) {
                 stopCurrentOnly(player);
                 player.sendMessage(ChatColor.LIGHT_PURPLE + "♫ Autoplay: Finding next recommended track...");
-                plugin.recommendations().getOrPredictNext(uuid, current)
-                        .thenAccept(recommended -> {
-                            if (recommended != null) {
-                                plugin.getServer().getScheduler().runTask(plugin, () -> {
-                                    if (player.isOnline()) {
-                                        plugin.recommendations().sendAutoplayNotification(player, recommended);
-                                        startTrack(player, recommended, true);
-                                    }
-                                });
-                            } else {
-                                plugin.getServer().getScheduler().runTask(plugin, () -> {
-                                    plugin.queues().setCurrent(uuid, null);
-                                    player.sendMessage(ChatColor.YELLOW + "There is no next track.");
-                                });
-                            }
-                        })
-                        .exceptionally(err -> {
-                            plugin.getServer().getScheduler().runTask(plugin, () -> {
-                                plugin.queues().setCurrent(uuid, null);
-                                player.sendMessage(ChatColor.YELLOW + "There is no next track.");
-                            });
-                            return null;
-                        });
+                playNextAutoplayRanked(player, current);
                 return;
             }
 
@@ -702,35 +687,7 @@ public final class MusicPlaybackManager {
             // Autoplay: if enabled, ask the RecommendationManager for the next track
             if (plugin.recommendations() != null
                     && plugin.recommendations().isAutoplayEnabled(uuid)) {
-                plugin.recommendations()
-                        .getOrPredictNext(uuid, track)
-                        .thenAccept(recommended -> {
-                            if (recommended != null) {
-                                plugin.getServer().getScheduler().runTask(plugin, () -> {
-                                    // Re-check the player is still online
-                                    if (player.isOnline()
-                                            && !plugin.network().isPlaying(player)) {
-                                        plugin.recommendations()
-                                                .sendAutoplayNotification(player, recommended);
-                                        startTrack(player, recommended, true);
-                                    }
-                                });
-                            } else {
-                                plugin.getServer().getScheduler().runTask(plugin, () ->
-                                        plugin.queues().setCurrent(uuid, null)
-                                );
-                            }
-                        })
-                        .exceptionally(err -> {
-                            plugin.getLogger().warning(
-                                    "[VibesInDev] Autoplay recommendation failed for "
-                                            + player.getName() + ": " + err.getMessage()
-                            );
-                            plugin.getServer().getScheduler().runTask(plugin, () ->
-                                    plugin.queues().setCurrent(uuid, null)
-                            );
-                            return null;
-                        });
+                playNextAutoplayRanked(player, track);
                 return; // Don't clear current yet — wait for async recommendation
             }
 
@@ -1244,37 +1201,7 @@ public final class MusicPlaybackManager {
                     && current != null) {
                 stopPartyStreams(party);
                 broadcastToPartyAll(party, ChatColor.LIGHT_PURPLE + "♫ Party Autoplay: Finding next recommended track...");
-                plugin.recommendations().getOrPredictNext(party.getOwner(), current)
-                        .thenAccept(recommended -> {
-                            if (recommended != null) {
-                                plugin.getServer().getScheduler().runTask(plugin, () -> {
-                                    Player currentOwner = plugin.getServer().getPlayer(party.getOwner());
-                                    if (currentOwner != null && currentOwner.isOnline()) {
-                                        broadcastToPartyAll(party,
-                                                ChatColor.LIGHT_PURPLE + "♫ Party Autoplay: "
-                                                        + ChatColor.WHITE + recommended.title()
-                                                        + ChatColor.GRAY + " by "
-                                                        + ChatColor.WHITE + recommended.artist()
-                                                        + ChatColor.DARK_GRAY + " (Recommended)");
-                                        startPartyTrack(currentOwner, party, recommended);
-                                    } else {
-                                        stopPartyPlayback(party);
-                                    }
-                                });
-                            } else {
-                                plugin.getServer().getScheduler().runTask(plugin, () -> {
-                                    stopPartyPlayback(party);
-                                    player.sendMessage(ChatColor.YELLOW + "There is no next party track.");
-                                });
-                            }
-                        })
-                        .exceptionally(err -> {
-                            plugin.getServer().getScheduler().runTask(plugin, () -> {
-                                stopPartyPlayback(party);
-                                player.sendMessage(ChatColor.YELLOW + "There is no next party track.");
-                            });
-                            return null;
-                        });
+                playNextPartyAutoplayRanked(party, current);
                 return;
             }
 
@@ -1609,44 +1536,12 @@ public final class MusicPlaybackManager {
                     && plugin.recommendations().isPartyAutoplayEnabled(party.getPartyId())) {
                 Player partyOwner = plugin.getServer().getPlayer(party.getOwner());
                 if (partyOwner != null && partyOwner.isOnline()) {
-                    plugin.recommendations()
-                            .getOrPredictNext(party.getOwner(), track)
-                            .thenAccept(recommended -> {
-                                if (recommended != null) {
-                                    plugin.getServer().getScheduler().runTask(plugin, () -> {
-                                        Player currentOwner = plugin.getServer().getPlayer(party.getOwner());
-                                        if (currentOwner != null && currentOwner.isOnline()) {
-                                            broadcastToPartyAll(party,
-                                                    ChatColor.LIGHT_PURPLE + "♫ Party Autoplay: "
-                                                            + ChatColor.WHITE + recommended.title()
-                                                            + ChatColor.GRAY + " by "
-                                                            + ChatColor.WHITE + recommended.artist()
-                                                            + ChatColor.DARK_GRAY + " (Recommended)");
-                                            startPartyTrack(currentOwner, party, recommended);
-                                        } else {
-                                            party.setCurrentTrack(null);
-                                            party.setPaused(false);
-                                        }
-                                    });
-                                } else {
-                                    plugin.getServer().getScheduler().runTask(plugin, () -> {
-                                        party.setCurrentTrack(null);
-                                        party.setPaused(false);
-                                    });
-                                }
-                            })
-                            .exceptionally(err -> {
-                                plugin.getLogger().warning(
-                                        "[VibesInDev] Party autoplay failed: " + err.getMessage()
-                                );
-                                plugin.getServer().getScheduler().runTask(plugin, () -> {
-                                    party.setCurrentTrack(null);
-                                    party.setPaused(false);
-                                });
-                                return null;
-                            });
-                    return;
+                    playNextPartyAutoplayRanked(party, track);
+                } else {
+                    party.setCurrentTrack(null);
+                    party.setPaused(false);
                 }
+                return;
             }
 
             party.setCurrentTrack(null);
@@ -2156,6 +2051,137 @@ public final class MusicPlaybackManager {
 
     public void broadcastToPartyAll(MusicParty party, String message) {
         broadcastToParty(party, message, null);
+    }
+
+    // =========================================================
+    // RANKED AUTOPLAY RESOLUTION & SELECTION
+    // =========================================================
+
+    private void playNextAutoplayRanked(Player player, Track seed) {
+        if (player == null || seed == null) return;
+        UUID uuid = player.getUniqueId();
+        plugin.recommendations().getOrPredictNextRanked(uuid, seed)
+                .thenAccept(picks -> {
+                    if (picks == null || picks.isEmpty()) {
+                        plugin.getServer().getScheduler().runTask(plugin, () -> {
+                            plugin.queues().setCurrent(uuid, null);
+                            player.sendMessage(ChatColor.LIGHT_PURPLE + "♫ Autoplay: Nothing new to play right now.");
+                        });
+                        return;
+                    }
+                    attemptAutoplayPick(player, picks, 0);
+                })
+                .exceptionally(err -> {
+                    plugin.getLogger().warning("[VibesInDev] Autoplay recommendation failed for "
+                            + player.getName() + ": " + err.getMessage());
+                    plugin.getServer().getScheduler().runTask(plugin, () -> {
+                        plugin.queues().setCurrent(uuid, null);
+                        player.sendMessage(ChatColor.LIGHT_PURPLE + "♫ Autoplay: Nothing new to play right now.");
+                    });
+                    return null;
+                });
+    }
+
+    private void attemptAutoplayPick(Player player, List<RankedPick> picks, int index) {
+        UUID uuid = player.getUniqueId();
+        if (picks == null || index >= picks.size()) {
+            plugin.getServer().getScheduler().runTask(plugin, () -> {
+                plugin.queues().setCurrent(uuid, null);
+                player.sendMessage(ChatColor.LIGHT_PURPLE + "♫ Autoplay: Nothing new to play right now.");
+            });
+            return;
+        }
+
+        RankedPick pick = picks.get(index);
+        Track track = pick != null ? pick.track() : null;
+        if (track == null) {
+            attemptAutoplayPick(player, picks, index + 1);
+            return;
+        }
+
+        plugin.getLogger().info("[VibesInDev] Attempting autoplay pick #" + (index + 1) + ": " + track.title() + " by " + track.artist());
+
+        prepareTrack(track).thenAccept(path -> {
+            plugin.getServer().getScheduler().runTask(plugin, () -> {
+                if (player.isOnline() && !plugin.network().isPlaying(player)) {
+                    plugin.recommendations().sendAutoplayNotification(player, track);
+                    startTrack(player, track, true);
+                }
+            });
+        }).exceptionally(err -> {
+            plugin.getLogger().warning("[VibesInDev] Autoplay pick #" + (index + 1) + " ("
+                    + track.title() + ") failed to prepare: " + err.getMessage() + ". Trying next pick...");
+            attemptAutoplayPick(player, picks, index + 1);
+            return null;
+        });
+    }
+
+    private void playNextPartyAutoplayRanked(MusicParty party, Track seed) {
+        if (party == null || seed == null) return;
+        plugin.recommendations().getOrPredictNextRanked(party.getOwner(), seed)
+                .thenAccept(picks -> {
+                    if (picks == null || picks.isEmpty()) {
+                        plugin.getServer().getScheduler().runTask(plugin, () -> {
+                            party.setCurrentTrack(null);
+                            party.setPaused(false);
+                            broadcastToPartyAll(party, ChatColor.LIGHT_PURPLE + "♫ Party Autoplay: Nothing new to play right now.");
+                        });
+                        return;
+                    }
+                    attemptPartyAutoplayPick(party, picks, 0);
+                })
+                .exceptionally(err -> {
+                    plugin.getLogger().warning("[VibesInDev] Party autoplay recommendation failed: " + err.getMessage());
+                    plugin.getServer().getScheduler().runTask(plugin, () -> {
+                        party.setCurrentTrack(null);
+                        party.setPaused(false);
+                        broadcastToPartyAll(party, ChatColor.LIGHT_PURPLE + "♫ Party Autoplay: Nothing new to play right now.");
+                    });
+                    return null;
+                });
+    }
+
+    private void attemptPartyAutoplayPick(MusicParty party, List<RankedPick> picks, int index) {
+        if (picks == null || index >= picks.size()) {
+            plugin.getServer().getScheduler().runTask(plugin, () -> {
+                party.setCurrentTrack(null);
+                party.setPaused(false);
+                broadcastToPartyAll(party, ChatColor.LIGHT_PURPLE + "♫ Party Autoplay: Nothing new to play right now.");
+            });
+            return;
+        }
+
+        RankedPick pick = picks.get(index);
+        Track track = pick != null ? pick.track() : null;
+        if (track == null) {
+            attemptPartyAutoplayPick(party, picks, index + 1);
+            return;
+        }
+
+        plugin.getLogger().info("[VibesInDev] Attempting party autoplay pick #" + (index + 1) + ": " + track.title() + " by " + track.artist());
+
+        prepareTrack(track).thenAccept(path -> {
+            plugin.getServer().getScheduler().runTask(plugin, () -> {
+                Player currentOwner = plugin.getServer().getPlayer(party.getOwner());
+                if (currentOwner != null && currentOwner.isOnline()) {
+                    broadcastToPartyAll(party,
+                            ChatColor.LIGHT_PURPLE + "♫ Party Autoplay: "
+                                    + ChatColor.WHITE + track.title()
+                                    + ChatColor.GRAY + " by "
+                                    + ChatColor.WHITE + track.artist()
+                                    + ChatColor.DARK_GRAY + " (Recommended)");
+                    startPartyTrack(currentOwner, party, track);
+                } else {
+                    party.setCurrentTrack(null);
+                    party.setPaused(false);
+                }
+            });
+        }).exceptionally(err -> {
+            plugin.getLogger().warning("[VibesInDev] Party autoplay pick #" + (index + 1) + " ("
+                    + track.title() + ") failed to prepare: " + err.getMessage() + ". Trying next pick...");
+            attemptPartyAutoplayPick(party, picks, index + 1);
+            return null;
+        });
     }
 
 }

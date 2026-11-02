@@ -1,6 +1,7 @@
 package dev.vibesindev.vibesmusic.recommendation;
 
 import dev.vibesindev.vibesmusic.VibesInDevPlugin;
+import dev.vibesindev.vibesmusic.cache.TrackCache;
 import dev.vibesindev.vibesmusic.model.Track;
 import dev.vibesindev.vibesmusic.spotify.SpotifyHttp;
 
@@ -101,9 +102,9 @@ public final class RecommendationEngine {
      * @param profile the listener's (or party's) taste profile
      * @return future resolving to the highest-scoring recommended track, or {@code null} if all fail
      */
-    public CompletableFuture<Track> recommendNext(Track seed, PlayerTasteProfile profile) {
+    public CompletableFuture<List<RankedPick>> recommendNextRanked(Track seed, PlayerTasteProfile profile) {
         if (seed == null) {
-            return fallbackTrending(seed, profile);
+            return fallbackTrendingRanked(seed, profile);
         }
 
         List<CompletableFuture<List<RecommendationCandidate>>> futures = new ArrayList<>();
@@ -128,13 +129,18 @@ public final class RecommendationEngine {
             futures.add(fetchFamiliarCandidates(seed, profile));
         }
 
-        return gatherAndPick(futures, seed, profile);
+        return gatherAndPickRanked(futures, seed, profile);
+    }
+
+    public CompletableFuture<Track> recommendNext(Track seed, PlayerTasteProfile profile) {
+        return recommendNextRanked(seed, profile)
+                .thenApply(picks -> (picks != null && !picks.isEmpty()) ? picks.get(0).track() : null);
     }
 
     /**
      * Gathers candidates across parallel streams with 3 000 ms per-stream timeout and 6 000 ms total deadline.
      */
-    public CompletableFuture<Track> gatherAndPick(
+    public CompletableFuture<List<RankedPick>> gatherAndPickRanked(
             List<CompletableFuture<List<RecommendationCandidate>>> streamFutures,
             Track seed,
             PlayerTasteProfile profile
@@ -167,17 +173,26 @@ public final class RecommendationEngine {
                 })
                 .thenCompose(candidates -> {
                     if (candidates.isEmpty()) {
-                        return fallbackTrending(seed, profile);
+                        return fallbackTrendingRanked(seed, profile);
                     }
 
                     // Score and rank candidates
-                    Track best = scoreAndPickBest(candidates, seed, profile);
-                    if (best != null) {
-                        return CompletableFuture.completedFuture(best);
+                    List<RankedPick> picks = scoreAndRankCandidates(candidates, seed, profile);
+                    if (picks != null && !picks.isEmpty()) {
+                        return CompletableFuture.completedFuture(picks);
                     }
-                    return fallbackTrending(seed, profile);
+                    return fallbackTrendingRanked(seed, profile);
                 })
-                .exceptionallyCompose(err -> fallbackTrending(seed, profile));
+                .exceptionallyCompose(err -> fallbackTrendingRanked(seed, profile));
+    }
+
+    public CompletableFuture<Track> gatherAndPick(
+            List<CompletableFuture<List<RecommendationCandidate>>> streamFutures,
+            Track seed,
+            PlayerTasteProfile profile
+    ) {
+        return gatherAndPickRanked(streamFutures, seed, profile)
+                .thenApply(picks -> (picks != null && !picks.isEmpty()) ? picks.get(0).track() : null);
     }
 
     // =========================================================
@@ -509,57 +524,102 @@ public final class RecommendationEngine {
     }
 
     /**
-     * Fallback: Surfaces trending / frequently played tracks across the server.
+     * Fallback: Surfaces trending / frequently played tracks across the server using the relaxation ladder.
      */
-    public CompletableFuture<Track> fallbackTrending(Track seed, PlayerTasteProfile profile) {
+    public CompletableFuture<List<RankedPick>> fallbackTrendingRanked(Track seed, PlayerTasteProfile profile) {
         if (plugin == null || plugin.cache() == null) {
-            return CompletableFuture.completedFuture(null);
+            return CompletableFuture.completedFuture(Collections.emptyList());
         }
         return CompletableFuture.supplyAsync(() -> {
             List<Track> trending = plugin.cache().getTrendingTracks(10);
             if (trending == null || trending.isEmpty()) {
-                return null;
-            }
-            List<Track> snapshot = new ArrayList<>(trending);
-            int cooldownTracks = plugin.getConfig() != null ? plugin.getConfig().getInt("recommendations.cooldown-tracks", 20) : 20;
-            long cooldownMs = (plugin.getConfig() != null ? plugin.getConfig().getLong("recommendations.cooldown-minutes", 45) : 45) * 60_000L;
-
-            // Tier 1: Strict filters (full cooldown window + strict seed/remix rejection)
-            for (Track t : snapshot) {
-                if (t == null) continue;
-                if (seed != null && PlayerTasteProfile.isSameSongOrRemix(t, seed)) {
-                    continue;
-                }
-                if (profile != null && profile.isFatigued(t, cooldownTracks, cooldownMs)) {
-                    continue;
-                }
-                return t;
+                return Collections.emptyList();
             }
 
-            // Tier 2: Soft relaxation ladder (relax cooldown to last 5 tracks & 15m, STILL strictly reject seed/remixes)
-            for (Track t : snapshot) {
-                if (t == null) continue;
-                if (seed != null && PlayerTasteProfile.isSameSongOrRemix(t, seed)) {
-                    continue;
+            int minEligible = plugin.getConfig() != null ? plugin.getConfig().getInt("recommendations.min-eligible", 3) : 3;
+            int baseCooldownTracks = plugin.getConfig() != null ? plugin.getConfig().getInt("recommendations.cooldown-tracks", 20) : 20;
+            long baseCooldownMs = (plugin.getConfig() != null ? plugin.getConfig().getLong("recommendations.cooldown-minutes", 45) : 45) * 60_000L;
+            long baseMinDur = plugin.getConfig() != null ? plugin.getConfig().getLong("recommendations.min-duration-seconds", 60) : 60;
+            if (baseMinDur <= 0) baseMinDur = 60;
+            long baseMaxDur = plugin.getConfig() != null ? plugin.getConfig().getLong("recommendations.max-duration-seconds", 600) : 600;
+            if (baseMaxDur <= 0) baseMaxDur = 600;
+
+            List<Track> chosen = Collections.emptyList();
+            int chosenLevel = 0;
+
+            for (int level = 0; level <= 4; level++) {
+                int curCooldownTracks = baseCooldownTracks;
+                long curCooldownMs = baseCooldownMs;
+                long curMinDur = baseMinDur;
+                long curMaxDur = baseMaxDur;
+
+                if (level == 1) {
+                    curCooldownMs = baseCooldownMs / 2;
+                } else if (level == 2) {
+                    curCooldownTracks = Math.min(10, baseCooldownTracks);
+                    curCooldownMs = 15 * 60_000L;
+                } else if (level == 3) {
+                    curCooldownTracks = Math.min(10, baseCooldownTracks);
+                    curCooldownMs = 15 * 60_000L;
+                } else if (level == 4) {
+                    curCooldownTracks = Math.min(10, baseCooldownTracks);
+                    curCooldownMs = 15 * 60_000L;
+                    curMinDur = (long) (baseMinDur * 0.5);
+                    curMaxDur = (long) (baseMaxDur * 1.5);
                 }
-                if (profile != null && profile.isFatigued(t, 5, 15 * 60_000L)) {
-                    continue;
+
+                List<Track> levelTracks = new ArrayList<>();
+                for (Track t : trending) {
+                    if (t == null || t.id() == null) continue;
+
+                    // HARD: Seed duplicate/remix
+                    if (seed != null && PlayerTasteProfile.isSameSongOrRemix(t, seed)) continue;
+
+                    // HARD: Disliked
+                    if (profile != null && profile.isDisliked(t.id())) continue;
+
+                    // HARD: Blacklist regex & duration guardrails
+                    if (CandidateFilter.isHardRejected(t.title(), t.durationSeconds(), RecommendationCandidate.Source.SERVER_TRENDING, curMinDur, curMaxDur)) {
+                        continue;
+                    }
+
+                    // SOFT: Fatigue cooldown
+                    if (profile != null && profile.isFatigued(t, curCooldownTracks, curCooldownMs)) continue;
+
+                    levelTracks.add(t);
                 }
-                return t;
+
+                chosen = levelTracks;
+                chosenLevel = level;
+
+                if (levelTracks.size() >= minEligible) {
+                    break;
+                }
             }
 
-            // Tier 3: Complete fatigue relaxation BUT NEVER repeat seed track or its remixes
-            for (Track t : snapshot) {
-                if (t == null) continue;
-                if (seed != null && PlayerTasteProfile.isSameSongOrRemix(t, seed)) {
-                    continue;
-                }
-                return t;
+            if (chosen.isEmpty()) {
+                return Collections.emptyList();
             }
 
-            // If ALL tracks in trending are variants/remixes of the seed, return null rather than looping the seed
-            return null;
+            List<RankedPick> picks = new ArrayList<>();
+            int count = Math.min(3, chosen.size());
+            for (int i = 0; i < count; i++) {
+                Track t = chosen.get(i);
+                picks.add(new RankedPick(
+                        t,
+                        RecommendationMode.SIMILAR,
+                        RecommendationCandidate.Source.SERVER_TRENDING,
+                        "Trending server track [ladder L" + chosenLevel + "]",
+                        0.50 - (i * 0.05)
+                ));
+            }
+            return picks;
         }, providerExecutor);
+    }
+
+    public CompletableFuture<Track> fallbackTrending(Track seed, PlayerTasteProfile profile) {
+        return fallbackTrendingRanked(seed, profile)
+                .thenApply(picks -> (picks != null && !picks.isEmpty()) ? picks.get(0).track() : null);
     }
 
     // =========================================================
@@ -570,16 +630,29 @@ public final class RecommendationEngine {
      * Evaluates every candidate against the formula:
      * Score = 0.35 * GenreMatch + 0.30 * ArtistAffinity + 0.20 * Continuity + 0.15 * Discovery - Fatigue + CacheBonus
      */
-    Track scoreAndPickBest(
+    public List<RankedPick> scoreAndRankCandidates(
             List<RecommendationCandidate> candidates,
             Track seed,
             PlayerTasteProfile profile
     ) {
         UUID uuid = profile != null ? profile.getPlayerUuid() : null;
         if (isEngineV2Enabled(uuid)) {
-            return scoreAndPickBestV2(candidates, seed, profile);
+            return scoreAndRankCandidatesV2(candidates, seed, profile, RANDOM);
         }
-        return scoreAndPickBestLegacy(candidates, seed, profile);
+        Track best = scoreAndPickBestLegacy(candidates, seed, profile);
+        if (best != null) {
+            return List.of(new RankedPick(best, RecommendationMode.SIMILAR, RecommendationCandidate.Source.DISCOVERY, "Legacy engine pick", 0.50));
+        }
+        return Collections.emptyList();
+    }
+
+    Track scoreAndPickBest(
+            List<RecommendationCandidate> candidates,
+            Track seed,
+            PlayerTasteProfile profile
+    ) {
+        List<RankedPick> picks = scoreAndRankCandidates(candidates, seed, profile);
+        return !picks.isEmpty() ? picks.get(0).track() : null;
     }
 
     public static RecommendationMode sampleMode(double familiarProb, double similarProb, double exploreProb, boolean allowExplore, Random random) {
@@ -744,9 +817,21 @@ public final class RecommendationEngine {
             Track seed,
             PlayerTasteProfile profile
     ) {
+        List<RankedPick> picks = scoreAndRankCandidatesV2(candidates, seed, profile, RANDOM);
+        return !picks.isEmpty() ? picks.get(0).track() : null;
+    }
+
+    List<RankedPick> scoreAndRankCandidatesV2(
+            List<RecommendationCandidate> candidates,
+            Track seed,
+            PlayerTasteProfile profile,
+            Random random
+    ) {
         if (candidates == null || candidates.isEmpty()) {
-            return null;
+            return Collections.emptyList();
         }
+        long startTime = System.currentTimeMillis();
+        Random rng = (random != null) ? random : RANDOM;
 
         // Background warm candidate genres so future scoring passes hit cache
         if (genreResolver != null) {
@@ -759,10 +844,13 @@ public final class RecommendationEngine {
             genreResolver.warmCandidateGenres(artists);
         }
 
-        int cooldownTracks = plugin != null && plugin.getConfig() != null ? plugin.getConfig().getInt("recommendations.cooldown-tracks", 20) : 20;
-        long cooldownMs = (plugin != null && plugin.getConfig() != null ? plugin.getConfig().getLong("recommendations.cooldown-minutes", 45) : 45) * 60_000L;
-        long minDur = plugin != null && plugin.getConfig() != null ? plugin.getConfig().getLong("recommendations.min-duration-seconds", 60) : 60;
-        long maxDur = plugin != null && plugin.getConfig() != null ? plugin.getConfig().getLong("recommendations.max-duration-seconds", 600) : 600;
+        int minEligible = plugin != null && plugin.getConfig() != null ? plugin.getConfig().getInt("recommendations.min-eligible", 3) : 3;
+        int baseCooldownTracks = plugin != null && plugin.getConfig() != null ? plugin.getConfig().getInt("recommendations.cooldown-tracks", 20) : 20;
+        long baseCooldownMs = (plugin != null && plugin.getConfig() != null ? plugin.getConfig().getLong("recommendations.cooldown-minutes", 45) : 45) * 60_000L;
+        long baseMinDur = plugin != null && plugin.getConfig() != null ? plugin.getConfig().getLong("recommendations.min-duration-seconds", 60) : 60;
+        if (baseMinDur <= 0) baseMinDur = 60;
+        long baseMaxDur = plugin != null && plugin.getConfig() != null ? plugin.getConfig().getLong("recommendations.max-duration-seconds", 600) : 600;
+        if (baseMaxDur <= 0) baseMaxDur = 600;
         double cacheBonusValue = plugin != null && plugin.getConfig() != null ? plugin.getConfig().getDouble("recommendations.cache-bonus", 0.02) : 0.02;
         double exploreMinContinuity = plugin != null && plugin.getConfig() != null ? plugin.getConfig().getDouble("recommendations.explore-min-continuity", 0.45) : 0.45;
         double minFeatureCoverage = plugin != null && plugin.getConfig() != null ? plugin.getConfig().getDouble("recommendations.min-feature-coverage", 0.35) : 0.35;
@@ -774,14 +862,13 @@ public final class RecommendationEngine {
 
         int sessionTracks = profile != null ? profile.getFatigueHistory().size() : 0;
         boolean allowExplore = sessionTracks >= 3;
-        RecommendationMode requestedMode = sampleMode(wFam, wSim, wExp, allowExplore, RANDOM);
+        RecommendationMode requestedMode = sampleMode(wFam, wSim, wExp, allowExplore, rng);
         RecommendationMode effectiveMode = requestedMode;
-
-        List<CandidateEvaluation> eligible = new ArrayList<>();
-        List<CandidateEvaluation> familiarPool = new ArrayList<>();
-        List<CandidateEvaluation> similarPool = new ArrayList<>();
-        List<CandidateEvaluation> explorePool = new ArrayList<>();
-        Set<String> seenIds = new HashSet<>();
+        double modeProb = switch (requestedMode) {
+            case FAMILIAR -> wFam;
+            case EXPLORE -> allowExplore ? wExp : 0.0;
+            default -> wSim;
+        };
 
         Set<String> likedKeys = new HashSet<>();
         Set<String> spotifyKeys = new HashSet<>();
@@ -831,117 +918,169 @@ public final class RecommendationEngine {
             }
         }
 
-        for (RecommendationCandidate c : candidates) {
-            Track t = c.track();
-            if (t == null || t.id() == null) continue;
-            if (seenIds.contains(t.id())) continue;
-            seenIds.add(t.id());
+        List<String> reuploads = (plugin != null && plugin.getConfig() != null)
+                ? plugin.getConfig().getStringList("recommendations.reupload-channel-patterns") : null;
 
-            // 0. STRICT SEED DUPLICATE FILTER
-            if (seed != null && PlayerTasteProfile.isSameSongOrRemix(t, seed)) {
-                continue;
+        List<CandidateEvaluation> chosenEligible = Collections.emptyList();
+        int chosenLevel = 0;
+
+        for (int level = 0; level <= 4; level++) {
+            int curCooldownTracks = baseCooldownTracks;
+            long curCooldownMs = baseCooldownMs;
+            boolean ignoreMonopoly = false;
+            long curMinDur = baseMinDur;
+            long curMaxDur = baseMaxDur;
+
+            if (level == 1) {
+                curCooldownMs = baseCooldownMs / 2;
+            } else if (level == 2) {
+                curCooldownTracks = Math.min(10, baseCooldownTracks);
+                curCooldownMs = 15 * 60_000L;
+            } else if (level == 3) {
+                curCooldownTracks = Math.min(10, baseCooldownTracks);
+                curCooldownMs = 15 * 60_000L;
+                ignoreMonopoly = true;
+            } else if (level == 4) {
+                curCooldownTracks = Math.min(10, baseCooldownTracks);
+                curCooldownMs = 15 * 60_000L;
+                ignoreMonopoly = true;
+                curMinDur = (long) (baseMinDur * 0.5);
+                curMaxDur = (long) (baseMaxDur * 1.5);
             }
 
-            // 1. CandidateFilter hard rejection (blacklist & duration)
-            if (CandidateFilter.isHardRejected(t.title(), t.durationSeconds(), c.source(), minDur, maxDur)) {
-                continue;
-            }
+            List<CandidateEvaluation> levelEligible = new ArrayList<>();
+            Set<String> seenIds = new HashSet<>();
 
-            // 2. Strict fatigue check
-            if (profile != null && profile.isFatigued(t, cooldownTracks, cooldownMs)) {
-                continue;
-            }
+            for (RecommendationCandidate c : candidates) {
+                Track t = c.track();
+                if (t == null || t.id() == null) continue;
+                if (!seenIds.add(t.id())) continue;
 
-            // 3. Artist affinity
-            double artistAffinity = profile != null ? profile.getArtistAffinity(t.artist()) : 0.2;
-
-            // 4. Vibe continuity
-            double continuity = 0.40;
-            if (seed != null) {
-                if (ArtistNames.sameArtist(seed.artist(), t.artist())) {
-                    continuity = 0.85;
-                } else if (c.source() == RecommendationCandidate.Source.YOUTUBE_RADIO) {
-                    continuity = 0.75;
-                } else if (c.source() == RecommendationCandidate.Source.SERVER_COLLABORATIVE) {
-                    continuity = 0.70;
+                // 0. HARD CONSTRAINT: Active dislike ban
+                if (profile != null && profile.isDisliked(t.id())) {
+                    continue;
                 }
+
+                // 1. HARD CONSTRAINT: Seed duplicate or remix/slowed/live
+                if (seed != null && PlayerTasteProfile.isSameSongOrRemix(t, seed)) {
+                    continue;
+                }
+
+                // 2. HARD CONSTRAINT: CandidateFilter blacklist & duration guardrails (duration relaxed in level 4)
+                if (CandidateFilter.isHardRejected(t.title(), t.durationSeconds(), c.source(), curMinDur, curMaxDur)) {
+                    continue;
+                }
+
+                // 3. SOFT CONSTRAINT: Fatigue check
+                if (profile != null && profile.isFatigued(t, curCooldownTracks, curCooldownMs)) {
+                    continue;
+                }
+
+                // Artist affinity
+                double artistAffinity = profile != null ? profile.getArtistAffinity(t.artist()) : 0.2;
+
+                // Continuity
+                double continuity = 0.40;
+                if (seed != null) {
+                    if (ArtistNames.sameArtist(seed.artist(), t.artist())) {
+                        continuity = 0.85;
+                    } else if (c.source() == RecommendationCandidate.Source.YOUTUBE_RADIO) {
+                        continuity = 0.75;
+                    } else if (c.source() == RecommendationCandidate.Source.SERVER_COLLABORATIVE) {
+                        continuity = 0.70;
+                    }
+                }
+
+                // Genre similarity
+                List<String> candidateGenres = (genreResolver != null && t.artist() != null)
+                        ? genreResolver.getCachedGenres(t.artist()) : Collections.emptyList();
+                boolean hasGenre = !candidateGenres.isEmpty();
+                double genreCosine = (profile != null && hasGenre)
+                        ? profile.calculateGenreCosineSimilarity(candidateGenres) : -1.0;
+                if (genreCosine < 0.0) hasGenre = false;
+
+                // Familiarity
+                String compKey = RecordingIdentity.compositionTitleKey(t.title(), t.artist());
+                boolean isLiked = (t.id() != null && likedKeys.contains(t.id())) || (!compKey.isEmpty() && likedKeys.contains(compKey));
+                boolean isSpotify = (t.id() != null && spotifyKeys.contains(t.id())) || (!compKey.isEmpty() && spotifyKeys.contains(compKey));
+                boolean isCompleted = (t.id() != null && completedKeys.contains(t.id())) || (!compKey.isEmpty() && completedKeys.contains(compKey));
+                double familiarity = calculateFamiliarity(c, artistAffinity, genreCosine, isLiked, isCompleted, isSpotify);
+
+                // Quality
+                double quality = CandidateFilter.evaluateQuality(
+                        t.title(),
+                        seed != null ? seed.title() : null,
+                        t.artist(),
+                        reuploads
+                );
+
+                // Novelty
+                double novelty = calculateNovelty(familiarity, artistAffinity);
+
+                // Monopoly multiplier (ignored at level >= 3)
+                double monopolyMultiplier = 1.0;
+                if (!ignoreMonopoly && profile != null) {
+                    int occurrences = profile.getRecentArtistCount(t.artist());
+                    monopolyMultiplier = getMonopolyMultiplier(occurrences);
+                }
+
+                CandidateEvaluation eval = new CandidateEvaluation(
+                        c, genreCosine, hasGenre, artistAffinity, continuity, familiarity, quality, novelty, monopolyMultiplier
+                );
+                levelEligible.add(eval);
             }
 
-            // 5. Genre similarity
-            List<String> candidateGenres = (genreResolver != null && t.artist() != null)
-                    ? genreResolver.getCachedGenres(t.artist()) : Collections.emptyList();
-            boolean hasGenre = !candidateGenres.isEmpty();
-            double genreCosine = (profile != null && hasGenre)
-                    ? profile.calculateGenreCosineSimilarity(candidateGenres) : -1.0;
-            if (genreCosine < 0.0) hasGenre = false;
+            chosenEligible = levelEligible;
+            chosenLevel = level;
 
-            // 6. Familiarity feature (Task 2.6)
-            String compKey = RecordingIdentity.compositionTitleKey(t.title(), t.artist());
-            boolean isLiked = (t.id() != null && likedKeys.contains(t.id())) || (!compKey.isEmpty() && likedKeys.contains(compKey));
-            boolean isSpotify = (t.id() != null && spotifyKeys.contains(t.id())) || (!compKey.isEmpty() && spotifyKeys.contains(compKey));
-            boolean isCompleted = (t.id() != null && completedKeys.contains(t.id())) || (!compKey.isEmpty() && completedKeys.contains(compKey));
+            if (levelEligible.size() >= minEligible) {
+                break;
+            }
+        }
 
-            double familiarity = calculateFamiliarity(c, artistAffinity, genreCosine, isLiked, isCompleted, isSpotify);
+        if (chosenEligible.isEmpty()) {
+            return Collections.emptyList();
+        }
 
-            // 7. Quality (CandidateFilter: Topic/VEVO boost, reupload penalty, live/slowed version soft penalty)
-            List<String> reuploads = (plugin != null && plugin.getConfig() != null)
-                    ? plugin.getConfig().getStringList("recommendations.reupload-channel-patterns") : null;
-            double quality = CandidateFilter.evaluateQuality(
-                    t.title(),
-                    seed != null ? seed.title() : null,
-                    t.artist(),
-                    reuploads
-            );
+        List<CandidateEvaluation> familiarPool = new ArrayList<>();
+        List<CandidateEvaluation> similarPool = new ArrayList<>();
+        List<CandidateEvaluation> explorePool = new ArrayList<>();
 
-            // 8. Novelty (Task 2.6)
-            double novelty = calculateNovelty(familiarity, artistAffinity);
-
-            // 9. Monopoly multiplier
-            int occurrences = profile != null ? profile.getRecentArtistCount(t.artist()) : 0;
-            double monopolyMultiplier = getMonopolyMultiplier(occurrences);
-
-            CandidateEvaluation eval = new CandidateEvaluation(
-                    c, genreCosine, hasGenre, artistAffinity, continuity, familiarity, quality, novelty, monopolyMultiplier
-            );
-            eligible.add(eval);
-
+        for (CandidateEvaluation eval : chosenEligible) {
+            RecommendationCandidate c = eval.candidate;
+            Track t = c.track();
             if (c.source() == RecommendationCandidate.Source.FAMILIAR) {
                 familiarPool.add(eval);
             }
-            if (artistAffinity >= 0.2 || (hasGenre && genreCosine >= 0.4)
+            if (eval.artistAffinity >= 0.2 || (eval.hasGenre && eval.genreCosine >= 0.4)
                     || c.source() == RecommendationCandidate.Source.SPOTIFY_GENRE
                     || c.source() == RecommendationCandidate.Source.YOUTUBE_RADIO
                     || c.source() == RecommendationCandidate.Source.SERVER_COLLABORATIVE) {
                 similarPool.add(eval);
             }
-            if (artistAffinity < 0.2 && continuity >= exploreMinContinuity
+            if (eval.artistAffinity < 0.2 && eval.continuity >= exploreMinContinuity
                     && (profile == null || !profile.isRecentArtist(t.artist()))) {
                 explorePool.add(eval);
             }
         }
 
-        if (eligible.isEmpty()) {
-            return null;
-        }
-
-        // Select mode pool with fallbacks
         List<CandidateEvaluation> activePool;
         if (effectiveMode == RecommendationMode.FAMILIAR) {
             if (!familiarPool.isEmpty()) {
                 activePool = familiarPool;
             } else {
                 effectiveMode = RecommendationMode.SIMILAR;
-                activePool = !similarPool.isEmpty() ? similarPool : eligible;
+                activePool = !similarPool.isEmpty() ? similarPool : chosenEligible;
             }
         } else if (effectiveMode == RecommendationMode.EXPLORE) {
             if (!explorePool.isEmpty()) {
                 activePool = explorePool;
             } else {
                 effectiveMode = RecommendationMode.SIMILAR;
-                activePool = !similarPool.isEmpty() ? similarPool : eligible;
+                activePool = !similarPool.isEmpty() ? similarPool : chosenEligible;
             }
         } else {
-            activePool = !similarPool.isEmpty() ? similarPool : eligible;
+            activePool = !similarPool.isEmpty() ? similarPool : chosenEligible;
         }
 
         double[] weights = getModeWeights(effectiveMode, plugin != null ? plugin.getConfig() : null);
@@ -962,7 +1101,7 @@ public final class RecommendationEngine {
         }
 
         if (scored.isEmpty()) {
-            return null;
+            return Collections.emptyList();
         }
 
         // MMR Diversity and Softmax Selection (Task 2.8)
@@ -989,14 +1128,94 @@ public final class RecommendationEngine {
         double lambda = plugin != null && plugin.getConfig() != null
                 ? plugin.getConfig().getDouble("recommendations.mmr-lambda", 0.70) : 0.70;
         double softmaxTemp = plugin != null && plugin.getConfig() != null
-                ? plugin.getConfig().getDouble("recommendations.softmax-temperature", 0.08) : 0.08;
+                ? plugin.getConfig().getDouble("recommendations.softmax-temperature", 0.08) : 0.0;
+
+        Collections.sort(scored);
+        List<RecommendationCandidate> top15 = scored.subList(0, Math.min(15, scored.size()));
 
         List<CandidateSelector.MmrCandidate> mmrList = CandidateSelector.greedyMmr(
-                scored, lastFive, artistGenreMap, lambda, 8
+                top15, lastFive, artistGenreMap, lambda, 8
         );
 
-        RecommendationCandidate chosen = CandidateSelector.softmaxSample(mmrList, softmaxTemp, RANDOM);
-        return chosen != null ? chosen.track() : scored.get(0).track();
+        RecommendationCandidate chosen = CandidateSelector.softmaxSample(mmrList, softmaxTemp, rng);
+        if (chosen == null && !mmrList.isEmpty()) {
+            chosen = mmrList.get(0).candidate();
+        } else if (chosen == null) {
+            chosen = scored.get(0);
+        }
+
+        List<RankedPick> picks = new ArrayList<>();
+        picks.add(new RankedPick(
+                chosen.track(),
+                effectiveMode,
+                chosen.source(),
+                chosen.reason(),
+                chosen.score()
+        ));
+
+        for (CandidateSelector.MmrCandidate mmr : mmrList) {
+            if (picks.size() >= 3) break;
+            RecommendationCandidate cand = mmr.candidate();
+            if (cand == null || cand.track() == null) continue;
+            boolean already = false;
+            for (RankedPick p : picks) {
+                if (p.track() != null && p.track().id() != null && p.track().id().equals(cand.track().id())) {
+                    already = true;
+                    break;
+                }
+            }
+            if (!already) {
+                picks.add(new RankedPick(
+                        cand.track(),
+                        effectiveMode,
+                        cand.source(),
+                        cand.reason(),
+                        cand.score()
+                ));
+            }
+        }
+
+        long elapsed = System.currentTimeMillis() - startTime;
+        if (plugin != null && plugin.cache() != null) {
+            List<TrackCache.CandidateTelemetry> telemList = new ArrayList<>();
+            for (int i = 0; i < picks.size(); i++) {
+                RankedPick p = picks.get(i);
+                telemList.add(new TrackCache.CandidateTelemetry(
+                        p.track().id(),
+                        i + 1,
+                        p.source().name(),
+                        p.score(),
+                        p.score(),
+                        null,
+                        1.0 / (i + 1),
+                        i == 0,
+                        "{}"
+                ));
+            }
+            plugin.cache().logRecImpression(
+                    UUID.randomUUID().toString(),
+                    System.currentTimeMillis(),
+                    profile != null ? profile.getPlayerUuid() : null,
+                    null,
+                    seed != null ? seed.id() : null,
+                    "v2",
+                    null,
+                    requestedMode.name(),
+                    effectiveMode.name(),
+                    modeProb,
+                    "[]",
+                    chosenLevel,
+                    candidates.size(),
+                    chosenEligible.size(),
+                    "{}",
+                    "{}",
+                    elapsed,
+                    picks.get(0).track().id(),
+                    telemList
+            );
+        }
+
+        return picks;
     }
 
     Track scoreAndPickBestLegacy(
@@ -1107,7 +1326,7 @@ public final class RecommendationEngine {
         double lambda = plugin != null && plugin.getConfig() != null
                 ? plugin.getConfig().getDouble("recommendations.mmr-lambda", 0.70) : 0.70;
         double softmaxTemp = plugin != null && plugin.getConfig() != null
-                ? plugin.getConfig().getDouble("recommendations.softmax-temperature", 0.08) : 0.08;
+                ? plugin.getConfig().getDouble("recommendations.softmax-temperature", 0.08) : 0.0;
 
         List<CandidateSelector.MmrCandidate> mmrList = CandidateSelector.greedyMmr(
                 scored, lastFive, artistGenreMap, lambda, 8

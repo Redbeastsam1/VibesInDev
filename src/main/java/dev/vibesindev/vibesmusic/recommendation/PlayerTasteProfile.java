@@ -57,6 +57,9 @@ public final class PlayerTasteProfile {
     /** Affinity half life in days (default 30 days, configurable via recommendations.affinity-half-life-days). */
     private double halfLifeDays = 30.0;
 
+    /** Least-misery penalty multiplier for party blends (default 0.5, configurable via recommendations.party.misery-lambda). */
+    private double miseryLambda = 0.5;
+
     /** Cached read-time normalized probability distribution (P(genre), sum = 1.0). */
     private volatile Map<String, Double> cachedGenreDistribution = null;
 
@@ -225,6 +228,15 @@ public final class PlayerTasteProfile {
 
     public double getHalfLifeDays() {
         return this.halfLifeDays;
+    }
+
+    public void setMiseryLambda(double lambda) {
+        this.miseryLambda = lambda;
+        invalidateAffinityCache();
+    }
+
+    public double getMiseryLambda() {
+        return this.miseryLambda;
     }
 
     public synchronized Map<String, Long> getArtistAffinityTimestamps() {
@@ -682,6 +694,28 @@ public final class PlayerTasteProfile {
         Double cached = affinityLookupCache.get(normKey);
         if (cached != null) return cached;
 
+        // Task 3.3: Fairer party blending (least-misery) when sourceProfiles is non-empty
+        // affinity = mean - lambda * stddev over members' individual affinities
+        if (sourceProfiles != null && !sourceProfiles.isEmpty()) {
+            int n = sourceProfiles.size();
+            double sum = 0.0;
+            double[] affs = new double[n];
+            for (int i = 0; i < n; i++) {
+                affs[i] = sourceProfiles.get(i).getArtistAffinity(artist);
+                sum += affs[i];
+            }
+            double mean = sum / n;
+            double varSum = 0.0;
+            for (int i = 0; i < n; i++) {
+                double diff = affs[i] - mean;
+                varSum += diff * diff;
+            }
+            double stddev = Math.sqrt(varSum / n);
+            double blendAff = Math.max(0.0, Math.min(1.0, mean - (miseryLambda * stddev)));
+            affinityLookupCache.put(normKey, blendAff);
+            return blendAff;
+        }
+
         double calculated = calculateArtistAffinity(key, normKey);
         affinityLookupCache.put(normKey, calculated);
         return calculated;
@@ -983,23 +1017,15 @@ public final class PlayerTasteProfile {
             }
         }
 
-        // 2. Blend unnormalized genre masses across profiles
+        // 2. Blend genre distributions across profiles: mean-based over normalized views
         for (PlayerTasteProfile p : profiles) {
-            synchronized (p) {
-                for (Map.Entry<String, Double> e : p.playGenreMass.entrySet()) {
-                    blend.playGenreMass.merge(e.getKey(), Double.valueOf(e.getValue().doubleValue() / n), (Double a, Double b) -> {
-                        double va = (a != null) ? a.doubleValue() : 0.0;
-                        double vb = (b != null) ? b.doubleValue() : 0.0;
-                        return Double.valueOf(va + vb);
-                    });
-                }
-                for (Map.Entry<String, Double> e : p.spotifyGenreMass.entrySet()) {
-                    blend.spotifyGenreMass.merge(e.getKey(), Double.valueOf(e.getValue().doubleValue() / n), (Double a, Double b) -> {
-                        double va = (a != null) ? a.doubleValue() : 0.0;
-                        double vb = (b != null) ? b.doubleValue() : 0.0;
-                        return Double.valueOf(va + vb);
-                    });
-                }
+            Map<String, Double> normDist = p.getGenreDistribution();
+            for (Map.Entry<String, Double> e : normDist.entrySet()) {
+                blend.playGenreMass.merge(e.getKey(), Double.valueOf(e.getValue().doubleValue() / n), (Double a, Double b) -> {
+                    double va = (a != null) ? a.doubleValue() : 0.0;
+                    double vb = (b != null) ? b.doubleValue() : 0.0;
+                    return Double.valueOf(va + vb);
+                });
             }
         }
 
@@ -1077,6 +1103,17 @@ public final class PlayerTasteProfile {
     // =========================================================
 
     public Map<String, Double> getArtistAffinities() {
+        if (sourceProfiles != null && !sourceProfiles.isEmpty()) {
+            Set<String> allArtists = new HashSet<>();
+            for (PlayerTasteProfile sp : sourceProfiles) {
+                allArtists.addAll(sp.artistAffinities.keySet());
+            }
+            Map<String, Double> effective = new HashMap<>();
+            for (String artist : allArtists) {
+                effective.put(artist, getArtistAffinity(artist));
+            }
+            return Collections.unmodifiableMap(effective);
+        }
         Map<String, Double> effective = new HashMap<>();
         for (Map.Entry<String, Double> e : artistAffinities.entrySet()) {
             effective.put(e.getKey(), computeDecayedAffinity(e.getKey(), e.getValue().doubleValue()));

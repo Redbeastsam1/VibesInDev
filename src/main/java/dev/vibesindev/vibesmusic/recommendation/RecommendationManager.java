@@ -24,7 +24,7 @@ public final class RecommendationManager implements org.bukkit.event.Listener {
 
     private final VibesInDevPlugin plugin;
     private final GenreResolver genreResolver;
-    private final RecommendationEngine engine;
+    private RecommendationEngine engine;
 
     /** Per-player taste profile models. */
     private final Map<UUID, PlayerTasteProfile> tasteProfiles = new ConcurrentHashMap<>();
@@ -36,10 +36,18 @@ public final class RecommendationManager implements org.bukkit.event.Listener {
     private final ConcurrentHashMap<UUID, Boolean> partyAutoplayStates = new ConcurrentHashMap<>();
 
     public RecommendationManager(VibesInDevPlugin plugin) {
+        this(plugin, null);
+    }
+
+    public RecommendationManager(VibesInDevPlugin plugin, RecommendationEngine engine) {
         this.plugin = plugin;
         this.genreResolver = new GenreResolver(plugin);
-        this.engine = new RecommendationEngine(plugin, this.genreResolver);
+        this.engine = (engine != null) ? engine : new RecommendationEngine(plugin, this.genreResolver);
         loadConfiguredLineages();
+    }
+
+    public void setEngine(RecommendationEngine engine) {
+        this.engine = engine;
     }
 
     public GenreResolver genreResolver() {
@@ -307,10 +315,29 @@ public final class RecommendationManager implements org.bukkit.event.Listener {
 
         if (party != null && party.getMemberCount() > 1) {
             List<PlayerTasteProfile> memberProfiles = new ArrayList<>();
-            for (UUID memberId : party.getMembers()) {
+            List<UUID> members = new ArrayList<>(party.getMembers());
+            for (UUID memberId : members) {
                 memberProfiles.add(getOrCreateProfile(memberId));
             }
-            profile = PlayerTasteProfile.blend(party.getPartyId(), memberProfiles);
+
+            boolean rotateLeader = plugin != null && plugin.getConfig() != null
+                    && plugin.getConfig().getBoolean("recommendations.party.rotate-leader", false);
+            int interval = plugin != null && plugin.getConfig() != null
+                    ? plugin.getConfig().getInt("recommendations.party.rotate-leader-interval", 3) : 3;
+            if (interval <= 0) interval = 3;
+
+            java.util.concurrent.atomic.AtomicInteger counter = partyPickCounters.computeIfAbsent(party.getPartyId(), k -> new java.util.concurrent.atomic.AtomicInteger(0));
+            int pickNum = counter.getAndIncrement();
+
+            if (rotateLeader && ((pickNum + 1) % interval == 0) && !memberProfiles.isEmpty()) {
+                int leaderIndex = (pickNum / interval) % memberProfiles.size();
+                profile = memberProfiles.get(leaderIndex);
+            } else {
+                double lambda = plugin != null && plugin.getConfig() != null
+                        ? plugin.getConfig().getDouble("recommendations.party.misery-lambda", 0.5) : 0.5;
+                profile = PlayerTasteProfile.blend(party.getPartyId(), memberProfiles);
+                profile.setMiseryLambda(lambda);
+            }
         } else {
             profile = getOrCreateProfile(playerUuid);
         }
@@ -325,6 +352,7 @@ public final class RecommendationManager implements org.bukkit.event.Listener {
     // =========================================================
 
     private final Map<UUID, SessionContext> sessionContexts = new ConcurrentHashMap<>();
+    private final Map<UUID, java.util.concurrent.atomic.AtomicInteger> partyPickCounters = new ConcurrentHashMap<>();
 
     public SessionContext getOrCreateSessionContext(UUID targetUuid) {
         if (targetUuid == null) return new SessionContext();
@@ -426,6 +454,7 @@ public final class RecommendationManager implements org.bukkit.event.Listener {
     public void onPartyDisband(UUID partyUuid) {
         partyAutoplayStates.remove(partyUuid);
         sessionContexts.remove(partyUuid);
+        partyPickCounters.remove(partyUuid);
     }
 
     private void loadConfiguredLineages() {

@@ -2400,6 +2400,9 @@ public final class SpotifyClient {
                     plugin.getLogger().info("[VibesInDev] Ingested " + (st.size() + mt.size()) + " Spotify top artists and expanded related artist lineage for " + player.getName() + ".");
                     player.sendMessage(ChatColor.GREEN + "✔ " + ChatColor.WHITE + "Spotify taste profile synchronized (" + st.size() + " recent favorite artists + band/solo lineage).");
                 }
+
+                // Also sync familiar tracks (top tracks, saved tracks, recently played)
+                syncFamiliarTracks(uuid);
             } catch (Exception e) {
                 plugin.getLogger().warning("[VibesInDev] Failed to ingest Spotify taste profile: " + e.getMessage());
             }
@@ -2407,6 +2410,173 @@ public final class SpotifyClient {
     }
 
 
+
+    public CompletableFuture<List<Track>> fetchUserTopTracks(UUID playerUuid, String timeRange, int limit) {
+        if (!isFeatureAvailable(SpotifyHttp.Feature.USER_TOP_TRACKS)) {
+            return CompletableFuture.completedFuture(Collections.emptyList());
+        }
+        return getUserToken(playerUuid).thenCompose(token -> {
+            if (token == null || token.isBlank()) {
+                return CompletableFuture.completedFuture(Collections.emptyList());
+            }
+            int lim = Math.max(1, Math.min(limit, 50));
+            String url = API_URL + "/me/top/tracks?time_range=" + enc(timeRange != null ? timeRange : "medium_term") + "&limit=" + lim;
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .timeout(Duration.ofSeconds(10))
+                    .header("Authorization", "Bearer " + token)
+                    .GET()
+                    .build();
+
+            return http.sendAsync(request, HttpResponse.BodyHandlers.ofString())
+                    .thenApply(res -> {
+                        List<Track> list = new ArrayList<>();
+                        if (res.statusCode() == 200 && res.body() != null) {
+                            try {
+                                com.google.gson.JsonObject root = com.google.gson.JsonParser.parseString(res.body()).getAsJsonObject();
+                                if (root.has("items") && root.get("items").isJsonArray()) {
+                                    for (com.google.gson.JsonElement el : root.getAsJsonArray("items")) {
+                                        if (el.isJsonObject()) {
+                                            Track t = parseTrack(el.getAsJsonObject());
+                                            if (t != null) list.add(t);
+                                        }
+                                    }
+                                }
+                            } catch (Exception e) {
+                                if (plugin != null && plugin.getLogger() != null) {
+                                    plugin.getLogger().warning("[VibesInDev] Failed to parse user top tracks: " + e.getMessage());
+                                }
+                            }
+                        } else if (res.statusCode() == 403 || res.statusCode() == 404 || res.statusCode() == 410) {
+                            spotifyHttp.disableFeature(SpotifyHttp.Feature.USER_TOP_TRACKS);
+                        }
+                        return list;
+                    }).exceptionally(ex -> Collections.emptyList());
+        });
+    }
+
+    public CompletableFuture<List<Track>> fetchUserSavedTracks(UUID playerUuid, int limit) {
+        if (!isFeatureAvailable(SpotifyHttp.Feature.USER_SAVED_TRACKS)) {
+            return CompletableFuture.completedFuture(Collections.emptyList());
+        }
+        return getUserToken(playerUuid).thenCompose(token -> {
+            if (token == null || token.isBlank()) {
+                return CompletableFuture.completedFuture(Collections.emptyList());
+            }
+            int lim = Math.max(1, Math.min(limit, 50));
+            String url = API_URL + "/me/tracks?limit=" + lim;
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .timeout(Duration.ofSeconds(10))
+                    .header("Authorization", "Bearer " + token)
+                    .GET()
+                    .build();
+
+            return http.sendAsync(request, HttpResponse.BodyHandlers.ofString())
+                    .thenApply(res -> {
+                        List<Track> list = new ArrayList<>();
+                        if (res.statusCode() == 200 && res.body() != null) {
+                            try {
+                                com.google.gson.JsonObject root = com.google.gson.JsonParser.parseString(res.body()).getAsJsonObject();
+                                if (root.has("items") && root.get("items").isJsonArray()) {
+                                    for (com.google.gson.JsonElement el : root.getAsJsonArray("items")) {
+                                        if (el.isJsonObject()) {
+                                            com.google.gson.JsonObject item = el.getAsJsonObject();
+                                            if (item.has("track") && item.get("track").isJsonObject()) {
+                                                Track t = parseTrack(item.getAsJsonObject("track"));
+                                                if (t != null) list.add(t);
+                                            }
+                                        }
+                                    }
+                                }
+                            } catch (Exception e) {
+                                if (plugin != null && plugin.getLogger() != null) {
+                                    plugin.getLogger().warning("[VibesInDev] Failed to parse user saved tracks: " + e.getMessage());
+                                }
+                            }
+                        } else if (res.statusCode() == 403 || res.statusCode() == 404 || res.statusCode() == 410) {
+                            spotifyHttp.disableFeature(SpotifyHttp.Feature.USER_SAVED_TRACKS);
+                        }
+                        return list;
+                    }).exceptionally(ex -> Collections.emptyList());
+        });
+    }
+
+    public CompletableFuture<List<Track>> fetchUserRecentlyPlayed(UUID playerUuid, int limit) {
+        if (!isFeatureAvailable(SpotifyHttp.Feature.USER_RECENTLY_PLAYED)) {
+            return CompletableFuture.completedFuture(Collections.emptyList());
+        }
+        return getUserToken(playerUuid).thenCompose(token -> {
+            if (token == null || token.isBlank()) {
+                return CompletableFuture.completedFuture(Collections.emptyList());
+            }
+            int lim = Math.max(1, Math.min(limit, 50));
+            String url = API_URL + "/me/player/recently-played?limit=" + lim;
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .timeout(Duration.ofSeconds(10))
+                    .header("Authorization", "Bearer " + token)
+                    .GET()
+                    .build();
+
+            return http.sendAsync(request, HttpResponse.BodyHandlers.ofString())
+                    .thenApply(res -> {
+                        List<Track> list = new ArrayList<>();
+                        if (res.statusCode() == 200 && res.body() != null) {
+                            try {
+                                com.google.gson.JsonObject root = com.google.gson.JsonParser.parseString(res.body()).getAsJsonObject();
+                                if (root.has("items") && root.get("items").isJsonArray()) {
+                                    for (com.google.gson.JsonElement el : root.getAsJsonArray("items")) {
+                                        if (el.isJsonObject()) {
+                                            com.google.gson.JsonObject item = el.getAsJsonObject();
+                                            if (item.has("track") && item.get("track").isJsonObject()) {
+                                                Track t = parseTrack(item.getAsJsonObject("track"));
+                                                if (t != null) list.add(t);
+                                            }
+                                        }
+                                    }
+                                }
+                            } catch (Exception e) {
+                                if (plugin != null && plugin.getLogger() != null) {
+                                    plugin.getLogger().warning("[VibesInDev] Failed to parse user recently played: " + e.getMessage());
+                                }
+                            }
+                        } else if (res.statusCode() == 403 || res.statusCode() == 404 || res.statusCode() == 410) {
+                            spotifyHttp.disableFeature(SpotifyHttp.Feature.USER_RECENTLY_PLAYED);
+                        }
+                        return list;
+                    }).exceptionally(ex -> Collections.emptyList());
+        });
+    }
+
+    public CompletableFuture<Void> syncFamiliarTracks(UUID playerUuid) {
+        if (playerUuid == null || plugin.cache() == null) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        CompletableFuture<List<Track>> stTop = fetchUserTopTracks(playerUuid, "short_term", 50);
+        CompletableFuture<List<Track>> mtTop = fetchUserTopTracks(playerUuid, "medium_term", 50);
+        CompletableFuture<List<Track>> saved = fetchUserSavedTracks(playerUuid, 50);
+        CompletableFuture<List<Track>> recent = fetchUserRecentlyPlayed(playerUuid, 50);
+
+        return CompletableFuture.allOf(stTop, mtTop, saved, recent).thenRun(() -> {
+            try {
+                List<Track> st = stTop.getNow(Collections.emptyList());
+                List<Track> mt = mtTop.getNow(Collections.emptyList());
+                List<Track> sv = saved.getNow(Collections.emptyList());
+                List<Track> rc = recent.getNow(Collections.emptyList());
+
+                if (!st.isEmpty()) plugin.cache().savePlayerSpotifyTracks(playerUuid, "top_short", st);
+                if (!mt.isEmpty()) plugin.cache().savePlayerSpotifyTracks(playerUuid, "top_medium", mt);
+                if (!sv.isEmpty()) plugin.cache().savePlayerSpotifyTracks(playerUuid, "saved", sv);
+                if (!rc.isEmpty()) plugin.cache().savePlayerSpotifyTracks(playerUuid, "recent", rc);
+            } catch (Exception e) {
+                if (plugin != null && plugin.getLogger() != null) {
+                    plugin.getLogger().warning("[VibesInDev] Failed to save familiar Spotify tracks: " + e.getMessage());
+                }
+            }
+        });
+    }
 
     private CompletableFuture<String> getUserToken() {
 

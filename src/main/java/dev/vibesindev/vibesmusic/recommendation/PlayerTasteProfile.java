@@ -186,6 +186,10 @@ public final class PlayerTasteProfile {
         return playerUuid;
     }
 
+    public List<PlayerTasteProfile> getSourceProfiles() {
+        return sourceProfiles != null ? sourceProfiles : Collections.emptyList();
+    }
+
     public long getLastSyncTimestamp() {
         return lastSyncTimestamp;
     }

@@ -28,6 +28,8 @@ public record RecommendationCandidate(
         YOUTUBE_RADIO,
         /** Stream D: Server collaborative filtering (co-play graph from SQLite history). */
         SERVER_COLLABORATIVE,
+        /** Stream E: Familiar library tracks (playlists, likes, history, cached Spotify tracks). */
+        FAMILIAR,
         /** Fallback: Most popular / trending tracks across the server. */
         SERVER_TRENDING,
         /** Epsilon-greedy exploratory candidate outside core favorites. */

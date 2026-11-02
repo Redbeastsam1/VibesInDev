@@ -9,6 +9,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
@@ -120,6 +121,11 @@ public final class RecommendationEngine {
         // Stream A & B: Local catalog + Spotify (if available) & Spotify micro-genre search
         if (seed != null) {
             futures.add(fetchSpotifyCandidates(seed, profile));
+        }
+
+        // Stream E: Familiar library tracks (playlists, likes, history, cached Spotify tracks)
+        if (profile != null) {
+            futures.add(fetchFamiliarCandidates(seed, profile));
         }
 
         return gatherAndPick(futures, seed, profile);
@@ -252,6 +258,101 @@ public final class RecommendationEngine {
                 }
             }
             return list;
+        }, providerExecutor).exceptionally(err -> Collections.emptyList());
+    }
+
+    /**
+     * Stream E: Familiar library tracks (playlists, likes, history, cached Spotify tracks).
+     */
+    CompletableFuture<List<RecommendationCandidate>> fetchFamiliarCandidates(Track seed, PlayerTasteProfile profile) {
+        if (profile == null) {
+            return CompletableFuture.completedFuture(Collections.emptyList());
+        }
+
+        return CompletableFuture.supplyAsync(() -> {
+            List<RecommendationCandidate> candidates = new ArrayList<>();
+            List<UUID> memberUuids = new ArrayList<>();
+            if (profile.getSourceProfiles() != null && !profile.getSourceProfiles().isEmpty()) {
+                for (PlayerTasteProfile p : profile.getSourceProfiles()) {
+                    if (p != null && p.getPlayerUuid() != null) memberUuids.add(p.getPlayerUuid());
+                }
+            } else if (profile.getPlayerUuid() != null) {
+                memberUuids.add(profile.getPlayerUuid());
+            }
+
+            int cooldownTracks = (plugin != null && plugin.getConfig() != null)
+                    ? plugin.getConfig().getInt("recommendations.cooldown-tracks", 20) : 20;
+            long cooldownMs = ((plugin != null && plugin.getConfig() != null)
+                    ? plugin.getConfig().getLong("recommendations.cooldown-minutes", 45) : 45) * 60_000L;
+
+            List<Track> pooled = new ArrayList<>();
+
+            for (UUID uuid : memberUuids) {
+                // 1. Player's custom playlists
+                if (plugin != null && plugin.playlists() != null) {
+                    Map<String, dev.vibesindev.vibesmusic.playlist.MusicPlaylistManager.CustomPlaylist> pls = plugin.playlists().getPlaylists(uuid);
+                    if (pls != null) {
+                        for (dev.vibesindev.vibesmusic.playlist.MusicPlaylistManager.CustomPlaylist cp : pls.values()) {
+                            if (cp != null && cp.tracks() != null) {
+                                pooled.addAll(cp.tracks());
+                            }
+                        }
+                    }
+                }
+
+                // 2. Liked tracks from history
+                if (plugin != null && plugin.cache() != null) {
+                    List<Track> liked = plugin.cache().getLikedTracksForPlayer(uuid, 50);
+                    if (liked != null) pooled.addAll(liked);
+                }
+
+                // 3. Top-played tracks in player_history (last 90 days)
+                if (plugin != null && plugin.cache() != null) {
+                    List<Track> topPlayed = plugin.cache().getTopPlayedTracksForPlayer(uuid, 50, 90L * 24 * 3600 * 1000L);
+                    if (topPlayed != null) pooled.addAll(topPlayed);
+                }
+
+                // 4. Cached Spotify tracks (synced top/saved/recent)
+                if (plugin != null && plugin.cache() != null) {
+                    List<Track> spotifyTracks = plugin.cache().getPlayerSpotifyTracks(uuid, 100);
+                    if (spotifyTracks != null) pooled.addAll(spotifyTracks);
+                }
+            }
+
+            // Deduplicate across streams by canonical title + artist key & apply hard eligibility filters
+            Set<String> seenKeys = new HashSet<>();
+            List<Track> eligible = new ArrayList<>();
+
+            for (Track t : pooled) {
+                if (t == null) continue;
+                if (seed != null && PlayerTasteProfile.isSameSongOrRemix(t, seed)) continue;
+                if (profile.isFatigued(t, cooldownTracks, cooldownMs)) continue;
+                if (t.id() != null && profile.isDisliked(t.id())) continue;
+
+                String compKey = RecordingIdentity.compositionTitleKey(t.title(), t.artist());
+                String normArtist = ArtistNames.normalize(t.artist());
+                String dedupeKey = (!compKey.isEmpty() ? compKey : t.title().toLowerCase(Locale.ROOT)) + "::" + normArtist;
+
+                if (seenKeys.add(dedupeKey)) {
+                    eligible.add(t);
+                }
+            }
+
+            // Shuffle and cap at ~15 candidates
+            Collections.shuffle(eligible);
+            int limit = Math.min(15, eligible.size());
+            for (int i = 0; i < limit; i++) {
+                Track t = eligible.get(i);
+                candidates.add(new RecommendationCandidate(
+                        t,
+                        0.0,
+                        RecommendationCandidate.Source.FAMILIAR,
+                        "Familiar library track",
+                        plugin != null && plugin.cache() != null && plugin.cache().hasAudio(t.id())
+                ));
+            }
+
+            return candidates;
         }, providerExecutor).exceptionally(err -> Collections.emptyList());
     }
 

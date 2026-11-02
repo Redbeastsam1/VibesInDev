@@ -177,6 +177,18 @@ public final class TrackCache {
                     "features_json TEXT, " +
                     "PRIMARY KEY (impression_id, track_id)" +
                     ")");
+            stmt.execute("CREATE TABLE IF NOT EXISTS player_spotify_tracks (" +
+                    "player_uuid TEXT NOT NULL, " +
+                    "track_id TEXT NOT NULL, " +
+                    "source TEXT NOT NULL, " +
+                    "title TEXT NOT NULL, " +
+                    "artist TEXT NOT NULL, " +
+                    "duration_s INTEGER NOT NULL, " +
+                    "added_at INTEGER, " +
+                    "synced_at INTEGER NOT NULL, " +
+                    "PRIMARY KEY (player_uuid, track_id, source)" +
+                    ")");
+            stmt.execute("CREATE INDEX IF NOT EXISTS idx_pst_player_uuid ON player_spotify_tracks(player_uuid);");
 
             // Schema migrations for pre-existing tables
             try {
@@ -1132,5 +1144,119 @@ public final class TrackCache {
                 }
             }
         });
+    }
+
+    public void savePlayerSpotifyTracks(UUID playerUuid, String source, List<Track> tracks) {
+        if (playerUuid == null || source == null || tracks == null || tracks.isEmpty()) return;
+        long now = System.currentTimeMillis();
+        String sql = "INSERT OR REPLACE INTO player_spotify_tracks (player_uuid, track_id, source, title, artist, duration_s, added_at, synced_at) " +
+                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            for (Track t : tracks) {
+                if (t == null || t.id() == null || t.id().isBlank()) continue;
+                ps.setString(1, playerUuid.toString());
+                ps.setString(2, t.id());
+                ps.setString(3, source);
+                ps.setString(4, t.title() != null ? t.title() : "");
+                ps.setString(5, t.artist() != null ? t.artist() : "");
+                ps.setLong(6, t.durationSeconds());
+                ps.setLong(7, now);
+                ps.setLong(8, now);
+                ps.addBatch();
+            }
+            ps.executeBatch();
+        } catch (SQLException e) {
+            if (plugin != null && plugin.getLogger() != null) {
+                plugin.getLogger().warning("[VibesInDev] Failed to save player Spotify tracks: " + e.getMessage());
+            }
+        }
+    }
+
+    public List<Track> getPlayerSpotifyTracks(UUID playerUuid, int limit) {
+        List<Track> list = new ArrayList<>();
+        if (playerUuid == null) return list;
+        String sql = "SELECT track_id, title, artist, duration_s, source FROM player_spotify_tracks " +
+                     "WHERE player_uuid = ? ORDER BY synced_at DESC LIMIT ?";
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, playerUuid.toString());
+            ps.setInt(2, limit);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String trackId = rs.getString("track_id");
+                    String title = rs.getString("title");
+                    String artist = rs.getString("artist");
+                    long dur = rs.getLong("duration_s");
+                    String lazyUrl = "spotify-lazy:" + artist + " - " + title + "::" + dur;
+                    list.add(new Track(trackId, title, artist, dur, lazyUrl));
+                }
+            }
+        } catch (SQLException e) {
+            if (plugin != null && plugin.getLogger() != null) {
+                plugin.getLogger().warning("[VibesInDev] Failed to get player Spotify tracks: " + e.getMessage());
+            }
+        }
+        return list;
+    }
+
+    public List<Track> getLikedTracksForPlayer(UUID playerUuid, int limit) {
+        List<Track> list = new ArrayList<>();
+        if (playerUuid == null) return list;
+        String sql = "SELECT t.id, t.title, t.artist, t.duration, t.source " +
+                     "FROM player_history ph JOIN tracks t ON ph.track_id = t.id " +
+                     "WHERE ph.player_uuid = ? AND ph.liked = 1 " +
+                     "GROUP BY t.id " +
+                     "ORDER BY MAX(ph.played_at) DESC LIMIT ?";
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, playerUuid.toString());
+            ps.setInt(2, limit);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    list.add(new Track(
+                            rs.getString("id"),
+                            rs.getString("title"),
+                            rs.getString("artist"),
+                            rs.getLong("duration"),
+                            rs.getString("source")
+                    ));
+                }
+            }
+        } catch (SQLException e) {
+            if (plugin != null && plugin.getLogger() != null) {
+                plugin.getLogger().warning("[VibesInDev] Failed to get liked tracks for player: " + e.getMessage());
+            }
+        }
+        return list;
+    }
+
+    public List<Track> getTopPlayedTracksForPlayer(UUID playerUuid, int limit, long maxAgeMs) {
+        List<Track> list = new ArrayList<>();
+        if (playerUuid == null) return list;
+        long cutoff = System.currentTimeMillis() - maxAgeMs;
+        String sql = "SELECT t.id, t.title, t.artist, t.duration, t.source, COUNT(*) as play_count " +
+                     "FROM player_history ph JOIN tracks t ON ph.track_id = t.id " +
+                     "WHERE ph.player_uuid = ? AND ph.played_at > ? " +
+                     "GROUP BY t.id " +
+                     "ORDER BY play_count DESC, MAX(ph.played_at) DESC LIMIT ?";
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, playerUuid.toString());
+            ps.setLong(2, cutoff);
+            ps.setInt(3, limit);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    list.add(new Track(
+                            rs.getString("id"),
+                            rs.getString("title"),
+                            rs.getString("artist"),
+                            rs.getLong("duration"),
+                            rs.getString("source")
+                    ));
+                }
+            }
+        } catch (SQLException e) {
+            if (plugin != null && plugin.getLogger() != null) {
+                plugin.getLogger().warning("[VibesInDev] Failed to get top played tracks for player: " + e.getMessage());
+            }
+        }
+        return list;
     }
 }

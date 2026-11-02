@@ -65,6 +65,28 @@ public final class RecommendationEngine {
                 },
                 new ThreadPoolExecutor.CallerRunsPolicy()
         );
+        boolean shadow = (plugin != null && plugin.getConfig() != null)
+                ? plugin.getConfig().getBoolean("recommendations.ranker.shadow", true) : true;
+        double alpha = (plugin != null && plugin.getConfig() != null)
+                ? plugin.getConfig().getDouble("recommendations.ranker.blend-alpha", 0.5) : 0.5;
+        this.learnedRanker = new LearnedRanker(shadow, alpha);
+
+        if (plugin != null && plugin.getConfig() != null) {
+            String weightsPath = plugin.getConfig().getString("recommendations.ranker.weights-file", "");
+            if (weightsPath != null && !weightsPath.isBlank()) {
+                java.io.File wFile = new java.io.File(weightsPath);
+                if (!wFile.isAbsolute() && plugin.getDataFolder() != null) {
+                    wFile = new java.io.File(plugin.getDataFolder(), weightsPath);
+                }
+                this.learnedRanker.loadFromFile(wFile);
+            }
+        }
+    }
+
+    private final LearnedRanker learnedRanker;
+
+    public LearnedRanker learnedRanker() {
+        return learnedRanker;
     }
 
     public GenreResolver genreResolver() {
@@ -1289,6 +1311,8 @@ public final class RecommendationEngine {
 
         List<RecommendationCandidate> scored = new ArrayList<>();
         Map<String, Map<String, Object>> candidateFeaturesMap = new HashMap<>();
+        Map<String, Double> candidateLearnedScoresMap = new HashMap<>();
+        Map<String, Double> candidateHeuristicScoresMap = new HashMap<>();
 
         for (CandidateEvaluation ev : activePool) {
             double effectiveNovelty = ev.novelty;
@@ -1299,12 +1323,12 @@ public final class RecommendationEngine {
                 // Boost novelty in EXPLORE mode with recent release feature (Task 4.3)
                 effectiveNovelty = (ev.novelty * 0.80) + (recentScore * 0.20);
             }
-            double score = calculateCandidateScore(
+            double heuristicScore = calculateCandidateScore(
                     ev.genreCosine, ev.hasGenre,
                     ev.artistAffinity, ev.continuity, ev.familiarity, ev.quality, effectiveNovelty,
                     weights, minFeatureCoverage, ev.monopolyMultiplier, ev.candidate.cachedLocally(), cacheBonusValue
             );
-            if (score >= 0.0) {
+            if (heuristicScore >= 0.0) {
                 Map<String, Object> feat = new LinkedHashMap<>();
                 feat.put("genreCosine", ev.hasGenre ? ev.genreCosine : null);
                 feat.put("artistAffinity", ev.artistAffinity);
@@ -1316,6 +1340,24 @@ public final class RecommendationEngine {
                 feat.put("recentRelease", hasRecent ? recentScore : null);
                 candidateFeaturesMap.put(ev.candidate.track().id(), feat);
 
+                Map<String, Double> normFeats = new HashMap<>();
+                normFeats.put("genre_match", ev.hasGenre ? ev.genreCosine : 0.5);
+                normFeats.put("artist_affinity", ev.artistAffinity);
+                normFeats.put("continuity", ev.continuity);
+                normFeats.put("familiarity", ev.familiarity);
+                normFeats.put("quality", ev.quality);
+                normFeats.put("novelty", effectiveNovelty);
+
+                Double learnedScore = null;
+                double finalScore = heuristicScore;
+                if (learnedRanker != null && learnedRanker.isLoaded()) {
+                    learnedScore = learnedRanker.computeLearnedScore(normFeats);
+                    finalScore = learnedRanker.blend(heuristicScore, learnedScore);
+                }
+
+                candidateLearnedScoresMap.put(ev.candidate.track().id(), learnedScore);
+                candidateHeuristicScoresMap.put(ev.candidate.track().id(), heuristicScore);
+
                 String reason = buildExplainabilityReason(
                         effectiveMode, ev.candidate.source(),
                         ev.genreCosine, ev.hasGenre,
@@ -1323,7 +1365,7 @@ public final class RecommendationEngine {
                         weights
                 );
                 scored.add(new RecommendationCandidate(
-                        ev.candidate.track(), score, ev.candidate.source(),
+                        ev.candidate.track(), finalScore, ev.candidate.source(),
                         reason, ev.candidate.cachedLocally()
                 ));
             } else {
@@ -1433,13 +1475,15 @@ public final class RecommendationEngine {
                 double selectionProbability = effectiveModeProbability * probInMode;
                 boolean isSelected = chosen.track().id().equals(tid);
                 String featsJson = new com.google.gson.Gson().toJson(candidateFeaturesMap.getOrDefault(tid, Collections.emptyMap()));
+                double hScore = candidateHeuristicScoresMap.getOrDefault(tid, sc.score());
+                Double lScore = candidateLearnedScoresMap.get(tid);
                 telemList.add(new TrackCache.CandidateTelemetry(
                         tid,
                         i + 1,
                         sc.source().name(),
                         sc.score(),
-                        sc.score(),
-                        null,
+                        hScore,
+                        lScore,
                         selectionProbability,
                         isSelected,
                         featsJson
@@ -1449,17 +1493,24 @@ public final class RecommendationEngine {
                 double probInMode = mmrSoftmaxProbMap.getOrDefault(chosen.track().id(), 0.0);
                 double selectionProbability = effectiveModeProbability * probInMode;
                 String featsJson = new com.google.gson.Gson().toJson(candidateFeaturesMap.getOrDefault(chosen.track().id(), Collections.emptyMap()));
+                double hScore = candidateHeuristicScoresMap.getOrDefault(chosen.track().id(), chosen.score());
+                Double lScore = candidateLearnedScoresMap.get(chosen.track().id());
                 telemList.add(new TrackCache.CandidateTelemetry(
                         chosen.track().id(),
                         topLimit + 1,
                         chosen.source().name(),
                         chosen.score(),
-                        chosen.score(),
-                        null,
+                        hScore,
+                        lScore,
                         selectionProbability,
                         true,
                         featsJson
                 ));
+            }
+
+            String modelVersion = "heuristic";
+            if (learnedRanker != null && learnedRanker.isLoaded()) {
+                modelVersion = (learnedRanker.isShadowMode() ? "shadow:" : "learned:") + learnedRanker.getVersion();
             }
 
             plugin.cache().logRecImpression(
@@ -1469,7 +1520,7 @@ public final class RecommendationEngine {
                     null,
                     seed != null ? seed.id() : null,
                     "v2",
-                    "heuristic",
+                    modelVersion,
                     requestedMode.name(),
                     effectiveMode.name(),
                     effectiveModeProbability,

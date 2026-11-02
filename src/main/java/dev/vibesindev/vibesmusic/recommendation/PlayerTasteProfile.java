@@ -39,11 +39,23 @@ public final class PlayerTasteProfile {
     /** Normalized artist affinities: artist name (lowercase) -> affinity weight (0.0 to 1.0). */
     private final Map<String, Double> artistAffinities = new ConcurrentHashMap<>();
 
+    /** Timestamps of last affinity updates per artist (artist name lowercase -> timestamp ms). */
+    private final Map<String, Long> artistAffinityTimestamps = new ConcurrentHashMap<>();
+
     /** Raw, unnormalized in-game play genre mass: genre tag (lowercase) -> accumulated mass. */
     private final Map<String, Double> playGenreMass = new ConcurrentHashMap<>();
 
+    /** Timestamps of last play genre updates (genre tag lowercase -> timestamp ms). */
+    private final Map<String, Long> playGenreMassTimestamps = new ConcurrentHashMap<>();
+
     /** Raw, unnormalized Spotify top artist genre mass: genre tag (lowercase) -> mass (replaced on sync). */
     private final Map<String, Double> spotifyGenreMass = new ConcurrentHashMap<>();
+
+    /** Configurable clock for time injection in tests and deterministic decay. */
+    private java.time.Clock clock = java.time.Clock.systemUTC();
+
+    /** Affinity half life in days (default 30 days, configurable via recommendations.affinity-half-life-days). */
+    private double halfLifeDays = 30.0;
 
     /** Cached read-time normalized probability distribution (P(genre), sum = 1.0). */
     private volatile Map<String, Double> cachedGenreDistribution = null;
@@ -174,12 +186,74 @@ public final class PlayerTasteProfile {
     private final List<PlayerTasteProfile> sourceProfiles;
 
     public PlayerTasteProfile(UUID playerUuid) {
-        this(playerUuid, Collections.emptyList());
+        this(playerUuid, Collections.emptyList(), java.time.Clock.systemUTC());
+    }
+
+    public PlayerTasteProfile(UUID playerUuid, java.time.Clock clock) {
+        this(playerUuid, Collections.emptyList(), clock);
     }
 
     public PlayerTasteProfile(UUID playerUuid, List<PlayerTasteProfile> sourceProfiles) {
+        this(playerUuid, sourceProfiles, java.time.Clock.systemUTC());
+    }
+
+    public PlayerTasteProfile(UUID playerUuid, List<PlayerTasteProfile> sourceProfiles, java.time.Clock clock) {
         this.playerUuid = playerUuid;
         this.sourceProfiles = (sourceProfiles != null) ? List.copyOf(sourceProfiles) : Collections.emptyList();
+        this.clock = (clock != null) ? clock : java.time.Clock.systemUTC();
+    }
+
+    public void setClock(java.time.Clock clock) {
+        this.clock = (clock != null) ? clock : java.time.Clock.systemUTC();
+        invalidateAffinityCache();
+        this.cachedGenreDistribution = null;
+    }
+
+    public java.time.Clock getClock() {
+        return this.clock;
+    }
+
+    private long currentTimeMillis() {
+        return clock != null ? clock.millis() : System.currentTimeMillis();
+    }
+
+    public void setHalfLifeDays(double days) {
+        this.halfLifeDays = (days > 0.0) ? days : 30.0;
+        invalidateAffinityCache();
+        this.cachedGenreDistribution = null;
+    }
+
+    public double getHalfLifeDays() {
+        return this.halfLifeDays;
+    }
+
+    public synchronized Map<String, Long> getArtistAffinityTimestamps() {
+        return Collections.unmodifiableMap(artistAffinityTimestamps);
+    }
+
+    public synchronized String exportAffinityTimestampsJson() {
+        return new com.google.gson.Gson().toJson(artistAffinityTimestamps);
+    }
+
+    public double getEffectiveArtistAffinity(String artistNorm) {
+        if (artistNorm == null || artistNorm.isBlank()) return 0.0;
+        Double raw = artistAffinities.get(artistNorm);
+        if (raw == null) return 0.0;
+        return computeDecayedAffinity(artistNorm, raw.doubleValue());
+    }
+
+    private double computeDecayedAffinity(String artistNorm, double rawValue) {
+        if (rawValue <= 0.0) return 0.0;
+        long now = currentTimeMillis();
+        Long ts = artistAffinityTimestamps.get(artistNorm);
+        long updatedAt = (ts != null) ? ts.longValue() : ((lastSyncTimestamp > 0) ? lastSyncTimestamp : now);
+        long deltaMs = Math.max(0L, now - updatedAt);
+        double halfLifeMs = halfLifeDays * 86_400_000.0;
+        if (halfLifeMs <= 0) halfLifeMs = 30.0 * 86_400_000.0;
+
+        double decayFactor = Math.pow(2.0, -((double) deltaMs / halfLifeMs));
+        double decayed = rawValue * decayFactor;
+        return Math.max(0.02, decayed);
     }
 
     public UUID getPlayerUuid() {
@@ -259,7 +333,7 @@ public final class PlayerTasteProfile {
         }
 
         double ratio = (durationMs > 0) ? (double) playedMs / durationMs : 0.0;
-        long now = System.currentTimeMillis();
+        long now = currentTimeMillis();
 
         if (outcome == RecommendationManager.Outcome.COMPLETED || ratio >= 0.80) {
             // Completion >= 80%: positive gain with diminishing returns
@@ -322,9 +396,10 @@ public final class PlayerTasteProfile {
     public synchronized void recordDislike(Track track) {
         if (track == null) return;
         long sevenDays = 7L * 24 * 60 * 60 * 1000L;
-        if (track.id() != null) dislikedTracks.put(track.id(), System.currentTimeMillis() + sevenDays);
+        long now = currentTimeMillis();
+        if (track.id() != null) dislikedTracks.put(track.id(), now + sevenDays);
         String compKey = RecordingIdentity.compositionTitleKey(track.title(), track.artist());
-        if (!compKey.isEmpty()) customTrackCooldowns.put(compKey, System.currentTimeMillis() + sevenDays);
+        if (!compKey.isEmpty()) customTrackCooldowns.put(compKey, now + sevenDays);
 
         String artist = ArtistNames.normalize(track.artist());
         downweightArtist(artist, 0.15);
@@ -332,20 +407,24 @@ public final class PlayerTasteProfile {
 
     private void boostArtistDiminishing(String artist, double gain) {
         if (artist == null || artist.isBlank() || artist.equalsIgnoreCase("unknown")) return;
+        long now = currentTimeMillis();
         artistAffinities.compute(artist, (k, oldVal) -> {
             double current = (oldVal != null) ? oldVal.doubleValue() : 0.20;
             double updated = current + gain * (1.0 - current);
             return Math.min(1.0, Math.max(0.01, updated));
         });
+        artistAffinityTimestamps.put(artist, now);
         invalidateAffinityCache();
     }
 
     private void downweightArtist(String artist, double factor) {
         if (artist == null || artist.isBlank() || artist.equalsIgnoreCase("unknown")) return;
+        long now = currentTimeMillis();
         artistAffinities.computeIfPresent(artist, (k, oldVal) -> {
             double ov = oldVal.doubleValue();
             return Math.max(0.01, ov * (1.0 - factor));
         });
+        artistAffinityTimestamps.put(artist, now);
         invalidateAffinityCache();
     }
 
@@ -360,6 +439,7 @@ public final class PlayerTasteProfile {
      * @param mediumTermArtists core 6 months favorites (weight: 0.7)
      */
     public synchronized void ingestSpotifyArtists(List<String> shortTermArtists, List<String> mediumTermArtists) {
+        long now = currentTimeMillis();
         if (shortTermArtists != null) {
             int rank = 1;
             int total = Math.max(1, shortTermArtists.size());
@@ -372,6 +452,7 @@ public final class PlayerTasteProfile {
                     double nw = (w != null) ? w.doubleValue() : 0.0;
                     return Double.valueOf(Math.max(ov, nw));
                 });
+                artistAffinityTimestamps.put(key, now);
                 rank++;
             }
         }
@@ -388,12 +469,13 @@ public final class PlayerTasteProfile {
                     double nw = (w != null) ? w.doubleValue() : 0.0;
                     return Double.valueOf(Math.max(ov, nw));
                 });
+                artistAffinityTimestamps.put(key, now);
                 rank++;
             }
         }
 
         normalizeAffinities();
-        this.lastSyncTimestamp = System.currentTimeMillis();
+        this.lastSyncTimestamp = now;
     }
 
     /**
@@ -420,12 +502,14 @@ public final class PlayerTasteProfile {
         }
         if (clean.isEmpty()) return;
         double perTag = weight / clean.size();
+        long now = currentTimeMillis();
         for (String key : clean) {
             playGenreMass.merge(key, Double.valueOf(perTag), (Double a, Double b) -> {
                 double va = (a != null) ? a.doubleValue() : 0.0;
                 double vb = (b != null) ? b.doubleValue() : 0.0;
                 return Double.valueOf(va + vb);
             });
+            playGenreMassTimestamps.put(key, now);
         }
         cachedGenreDistribution = null;
     }
@@ -494,20 +578,42 @@ public final class PlayerTasteProfile {
             }
             Map<String, Double> combined = new HashMap<>();
             double totalSum = 0.0;
+            long now = currentTimeMillis();
+            double halfLifeMs = halfLifeDays * 86_400_000.0;
+            if (halfLifeMs <= 0) halfLifeMs = 30.0 * 86_400_000.0;
+
+            // Decayed playGenreMass
             for (Map.Entry<String, Double> e : playGenreMass.entrySet()) {
                 Double v = e.getValue();
                 if (v != null && v.doubleValue() > 0.0) {
-                    combined.merge(e.getKey(), v, (Double a, Double b) -> Double.valueOf((a != null ? a.doubleValue() : 0.0) + (b != null ? b.doubleValue() : 0.0)));
-                    totalSum += v.doubleValue();
+                    Long ts = playGenreMassTimestamps.get(e.getKey());
+                    long updatedAt = (ts != null) ? ts.longValue() : ((lastSyncTimestamp > 0) ? lastSyncTimestamp : now);
+                    long deltaMs = Math.max(0L, now - updatedAt);
+                    double decay = Math.pow(2.0, -((double) deltaMs / halfLifeMs));
+                    double decayedVal = v.doubleValue() * decay;
+                    if (decayedVal > 0.0) {
+                        combined.merge(e.getKey(), Double.valueOf(decayedVal), (Double a, Double b) -> Double.valueOf((a != null ? a.doubleValue() : 0.0) + (b != null ? b.doubleValue() : 0.0)));
+                        totalSum += decayedVal;
+                    }
                 }
             }
+
+            // Decayed spotifyGenreMass: decays between syncs
+            long spotifyUpdatedAt = (lastSyncTimestamp > 0) ? lastSyncTimestamp : now;
+            long spotifyDeltaMs = Math.max(0L, now - spotifyUpdatedAt);
+            double spotifyDecay = Math.pow(2.0, -((double) spotifyDeltaMs / halfLifeMs));
+
             for (Map.Entry<String, Double> e : spotifyGenreMass.entrySet()) {
                 Double v = e.getValue();
                 if (v != null && v.doubleValue() > 0.0) {
-                    combined.merge(e.getKey(), v, (Double a, Double b) -> Double.valueOf((a != null ? a.doubleValue() : 0.0) + (b != null ? b.doubleValue() : 0.0)));
-                    totalSum += v.doubleValue();
+                    double decayedVal = v.doubleValue() * spotifyDecay;
+                    if (decayedVal > 0.0) {
+                        combined.merge(e.getKey(), Double.valueOf(decayedVal), (Double a, Double b) -> Double.valueOf((a != null ? a.doubleValue() : 0.0) + (b != null ? b.doubleValue() : 0.0)));
+                        totalSum += decayedVal;
+                    }
                 }
             }
+
             if (totalSum <= 0.0 || combined.isEmpty()) {
                 cachedGenreDistribution = Collections.emptyMap();
                 return cachedGenreDistribution;
@@ -587,7 +693,7 @@ public final class PlayerTasteProfile {
         if (val == null) {
             val = artistAffinities.get(key);
         }
-        if (val != null) return val;
+        if (val != null) return computeDecayedAffinity(normKey, val.doubleValue());
 
         // 2. Token index lookup (fixes F7: O(1) candidate lookup instead of linear scan across all affinities)
         double highestSub = 0.0;
@@ -608,7 +714,8 @@ public final class PlayerTasteProfile {
             if (aff != null) {
                 double matchFactor = ArtistNames.exactOrCollab(normKey, cand);
                 if (matchFactor > 0.0) {
-                    double score = aff * matchFactor;
+                    double decayedAff = computeDecayedAffinity(cand, aff.doubleValue());
+                    double score = decayedAff * matchFactor;
                     if (score > highestSub) highestSub = score;
                 }
             }
@@ -623,8 +730,9 @@ public final class PlayerTasteProfile {
         if (!connected.isEmpty()) {
             for (String rel : connected) {
                 Double relAffinity = artistAffinities.get(rel);
-                if (relAffinity != null && relAffinity > 0.0) {
-                    double lineageScore = relAffinity * 0.75;
+                if (relAffinity != null && relAffinity.doubleValue() > 0.0) {
+                    double decayedLineageAff = computeDecayedAffinity(rel, relAffinity.doubleValue());
+                    double lineageScore = decayedLineageAff * 0.75;
                     if (lineageScore > highestLineage) {
                         highestLineage = lineageScore;
                     }
@@ -860,15 +968,18 @@ public final class PlayerTasteProfile {
         PlayerTasteProfile blend = new PlayerTasteProfile(partyUuid != null ? partyUuid : UUID.randomUUID(), profiles);
 
         int n = profiles.size();
+        long blendNow = System.currentTimeMillis();
 
         // 1. Blend artist affinities
         for (PlayerTasteProfile p : profiles) {
             for (Map.Entry<String, Double> e : p.artistAffinities.entrySet()) {
-                blend.artistAffinities.merge(e.getKey(), Double.valueOf(e.getValue().doubleValue() / n), (Double a, Double b) -> {
+                double effective = p.getEffectiveArtistAffinity(e.getKey());
+                blend.artistAffinities.merge(e.getKey(), Double.valueOf(effective / n), (Double a, Double b) -> {
                     double va = (a != null) ? a.doubleValue() : 0.0;
                     double vb = (b != null) ? b.doubleValue() : 0.0;
                     return Double.valueOf(va + vb);
                 });
+                blend.artistAffinityTimestamps.put(e.getKey(), blendNow);
             }
         }
 
@@ -966,7 +1077,11 @@ public final class PlayerTasteProfile {
     // =========================================================
 
     public Map<String, Double> getArtistAffinities() {
-        return Collections.unmodifiableMap(artistAffinities);
+        Map<String, Double> effective = new HashMap<>();
+        for (Map.Entry<String, Double> e : artistAffinities.entrySet()) {
+            effective.put(e.getKey(), computeDecayedAffinity(e.getKey(), e.getValue().doubleValue()));
+        }
+        return Collections.unmodifiableMap(effective);
     }
 
     public Map<String, Long> getDislikedTracks() {
@@ -1016,9 +1131,10 @@ public final class PlayerTasteProfile {
             Map<String, Set<String>> lineage,
             long lastSync
     ) {
-        restoreFromSnapshot(affinities, genres, null, null, dislikes, lineage, lastSync);
+        restoreFromSnapshot(affinities, genres, null, null, dislikes, lineage, lastSync, null);
     }
 
+    @Deprecated
     public synchronized void restoreFromSnapshot(
             Map<String, Double> affinities,
             Map<String, Double> legacyGenres,
@@ -1028,17 +1144,43 @@ public final class PlayerTasteProfile {
             Map<String, Set<String>> lineage,
             long lastSync
     ) {
+        restoreFromSnapshot(affinities, legacyGenres, playMass, spotifyMass, dislikes, lineage, lastSync, null);
+    }
+
+    public synchronized void restoreFromSnapshot(
+            Map<String, Double> affinities,
+            Map<String, Double> legacyGenres,
+            Map<String, Double> playMass,
+            Map<String, Double> spotifyMass,
+            Map<String, Long> dislikes,
+            Map<String, Set<String>> lineage,
+            long lastSync,
+            Map<String, Long> affinityTimestamps
+    ) {
+        long now = currentTimeMillis();
+        long defaultTs = (lastSync > 0) ? lastSync : now;
         if (affinities != null && !affinities.isEmpty()) {
             this.artistAffinities.putAll(affinities);
+            for (String artist : affinities.keySet()) {
+                Long ts = (affinityTimestamps != null) ? affinityTimestamps.get(artist) : null;
+                this.artistAffinityTimestamps.put(artist, (ts != null) ? ts : defaultTs);
+            }
         }
         if ((playMass != null && !playMass.isEmpty()) || (spotifyMass != null && !spotifyMass.isEmpty())) {
-            if (playMass != null) this.playGenreMass.putAll(playMass);
+            if (playMass != null) {
+                this.playGenreMass.putAll(playMass);
+                for (String g : playMass.keySet()) {
+                    this.playGenreMassTimestamps.put(g, defaultTs);
+                }
+            }
             if (spotifyMass != null) this.spotifyGenreMass.putAll(spotifyMass);
         } else if (legacyGenres != null && !legacyGenres.isEmpty()) {
             this.playGenreMass.putAll(legacyGenres);
+            for (String g : legacyGenres.keySet()) {
+                this.playGenreMassTimestamps.put(g, defaultTs);
+            }
         }
         if (dislikes != null) {
-            long now = System.currentTimeMillis();
             for (Map.Entry<String, Long> e : dislikes.entrySet()) {
                 if (e.getValue() != null && e.getValue().longValue() > now) {
                     this.dislikedTracks.put(e.getKey(), e.getValue());

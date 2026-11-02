@@ -71,6 +71,8 @@ recommendations:
   autoplay-default: true
   # Epsilon-greedy discovery ratio (exploration vs exploitation)
   exploration-ratio: 0.20
+  # Time decay (Task 3.1)
+  affinity-half-life-days: 30
   # Avoid repeating tracks heard in the last N songs
   cooldown-tracks: 20
   cooldown-minutes: 45

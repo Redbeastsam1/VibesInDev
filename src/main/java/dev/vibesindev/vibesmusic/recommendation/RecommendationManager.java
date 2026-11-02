@@ -68,6 +68,10 @@ public final class RecommendationManager implements org.bukkit.event.Listener {
         }
 
         PlayerTasteProfile fresh = new PlayerTasteProfile(playerUuid);
+        double halfLife = (plugin != null && plugin.getConfig() != null)
+                ? plugin.getConfig().getDouble("recommendations.affinity-half-life-days", 30.0)
+                : 30.0;
+        fresh.setHalfLifeDays(halfLife);
         PlayerTasteProfile previous = tasteProfiles.putIfAbsent(playerUuid, fresh);
         if (previous != null) {
             return previous;
@@ -104,6 +108,11 @@ public final class RecommendationManager implements org.bukkit.event.Listener {
 
     private void hydrateProfileFromDiskSync(UUID playerUuid, PlayerTasteProfile profile) {
         if (plugin == null || plugin.cache() == null || profile == null) return;
+        double halfLife = (plugin != null && plugin.getConfig() != null)
+                ? plugin.getConfig().getDouble("recommendations.affinity-half-life-days", 30.0)
+                : 30.0;
+        profile.setHalfLifeDays(halfLife);
+
         // 1. Restore persistent profile snapshot from SQLite
         dev.vibesindev.vibesmusic.cache.TrackCache.TasteProfileSnapshot snapshot = plugin.cache().loadTasteProfile(playerUuid);
         if (snapshot != null) {
@@ -114,7 +123,8 @@ public final class RecommendationManager implements org.bukkit.event.Listener {
                     snapshot.spotifyGenreMass(),
                     snapshot.dislikes(),
                     snapshot.lineage(),
-                    snapshot.lastSync()
+                    snapshot.lastSync(),
+                    snapshot.affinityTimestamps()
             );
         }
 
@@ -365,7 +375,8 @@ public final class RecommendationManager implements org.bukkit.event.Listener {
                 profile.exportDislikesJson(),
                 profile.exportLineageJson(),
                 profile.getLastSyncTimestamp(),
-                profile.exportGenreMassJson()
+                profile.exportGenreMassJson(),
+                profile.exportAffinityTimestampsJson()
         );
     }
 

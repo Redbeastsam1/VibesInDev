@@ -119,26 +119,27 @@ public final class CandidateSelector {
         return selected;
     }
 
-    public static RecommendationCandidate softmaxSample(
+    public static double[] computeSoftmaxProbabilities(
             List<MmrCandidate> mmrList,
-            double temperature,
-            Random random
+            double temperature
     ) {
         if (mmrList == null || mmrList.isEmpty()) {
-            return null;
+            return new double[0];
         }
 
         if (temperature <= 0.0 || mmrList.size() == 1) {
-            MmrCandidate best = mmrList.get(0);
-            for (MmrCandidate c : mmrList) {
-                if (c.mmrScore() > best.mmrScore()) {
-                    best = c;
+            double[] probs = new double[mmrList.size()];
+            int bestIdx = 0;
+            double bestScore = mmrList.get(0).mmrScore();
+            for (int i = 1; i < mmrList.size(); i++) {
+                if (mmrList.get(i).mmrScore() > bestScore) {
+                    bestScore = mmrList.get(i).mmrScore();
+                    bestIdx = i;
                 }
             }
-            return best.candidate();
+            probs[bestIdx] = 1.0;
+            return probs;
         }
-
-        Random rng = (random != null) ? random : new Random();
 
         double maxScore = -Double.MAX_VALUE;
         for (MmrCandidate c : mmrList) {
@@ -153,14 +154,41 @@ public final class CandidateSelector {
             sumExp += v;
         }
 
+        double[] probs = new double[mmrList.size()];
         if (sumExp <= 0.0 || Double.isNaN(sumExp)) {
+            probs[0] = 1.0;
+            return probs;
+        }
+        for (int i = 0; i < mmrList.size(); i++) {
+            probs[i] = expWeights[i] / sumExp;
+        }
+        return probs;
+    }
+
+    public static RecommendationCandidate softmaxSample(
+            List<MmrCandidate> mmrList,
+            double temperature,
+            Random random
+    ) {
+        if (mmrList == null || mmrList.isEmpty()) {
+            return null;
+        }
+
+        double[] probs = computeSoftmaxProbabilities(mmrList, temperature);
+        if (probs.length == 0) return null;
+
+        if (temperature <= 0.0 || mmrList.size() == 1) {
+            for (int i = 0; i < probs.length; i++) {
+                if (probs[i] == 1.0) return mmrList.get(i).candidate();
+            }
             return mmrList.get(0).candidate();
         }
 
-        double r = rng.nextDouble() * sumExp;
+        Random rng = (random != null) ? random : new Random();
+        double r = rng.nextDouble();
         double running = 0.0;
         for (int i = 0; i < mmrList.size(); i++) {
-            running += expWeights[i];
+            running += probs[i];
             if (running >= r) {
                 return mmrList.get(i).candidate();
             }

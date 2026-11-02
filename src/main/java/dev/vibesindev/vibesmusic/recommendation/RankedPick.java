@@ -16,5 +16,16 @@ public record RankedPick(
         RecommendationMode mode,
         RecommendationCandidate.Source source,
         String reason,
-        double score
-) {}
+        double score,
+        String impressionId
+) {
+    public RankedPick(
+            Track track,
+            RecommendationMode mode,
+            RecommendationCandidate.Source source,
+            String reason,
+            double score
+    ) {
+        this(track, mode, source, reason, score, null);
+    }
+}

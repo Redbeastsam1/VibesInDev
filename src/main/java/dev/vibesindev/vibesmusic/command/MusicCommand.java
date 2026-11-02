@@ -20,6 +20,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 public final class MusicCommand
         implements CommandExecutor, TabCompleter {
@@ -79,6 +80,16 @@ public final class MusicCommand
                             + "VibesInDev reloaded."
             );
 
+            return true;
+        }
+
+        if (sub.equals("rec")) {
+            recCommand(sender, args);
+            return true;
+        }
+
+        if (sub.equals("recstats")) {
+            recStatsCommand(sender, args);
             return true;
         }
 
@@ -422,6 +433,9 @@ public final class MusicCommand
 
             case "status", "diagnostics", "metrics" ->
                     status(player);
+
+            case "why" ->
+                    why(player);
                     
             case "debug" ->
                     debug(player, args);
@@ -2224,6 +2238,121 @@ public final class MusicCommand
         return true;
     }
 
+    private void why(Player player) {
+        if (!player.hasPermission("vibesindev.use")) {
+            deny(player);
+            return;
+        }
+        if (plugin.recommendations() == null) {
+            player.sendMessage(ChatColor.RED + "Recommendation engine is not available.");
+            return;
+        }
+
+        UUID targetUuid = player.getUniqueId();
+        MusicParty party = (plugin.parties() != null) ? plugin.parties().getPartyByPlayer(player.getUniqueId()) : null;
+        if (party != null && party.getMemberCount() > 1) {
+            targetUuid = party.getPartyId();
+        }
+
+        dev.vibesindev.vibesmusic.recommendation.RankedPick pick = plugin.recommendations().getLastAutoplayPick(targetUuid);
+        if (pick == null) {
+            pick = plugin.recommendations().getLastAutoplayPick(player.getUniqueId());
+        }
+        if (pick == null) {
+            player.sendMessage(ChatColor.YELLOW + "No recent autoplay recommendation found for this session.");
+            return;
+        }
+
+        player.sendMessage(ChatColor.LIGHT_PURPLE + "✦ Autoplay Recommendation Explanation ✦");
+        player.sendMessage(ChatColor.GRAY + "Track: " + ChatColor.WHITE + pick.track().title() + ChatColor.GRAY + " by " + ChatColor.WHITE + pick.track().artist());
+        player.sendMessage(ChatColor.GRAY + "Mode: " + ChatColor.AQUA + pick.mode().name() + ChatColor.GRAY + " | Source: " + ChatColor.GREEN + pick.source().name());
+        player.sendMessage(ChatColor.GRAY + "Final Score: " + ChatColor.YELLOW + String.format(java.util.Locale.ROOT, "%.3f", pick.score()));
+        if (pick.reason() != null && !pick.reason().isBlank()) {
+            player.sendMessage(ChatColor.GRAY + "Reason: " + ChatColor.GOLD + pick.reason());
+        }
+    }
+
+    private void recCommand(CommandSender sender, String[] args) {
+        if (!sender.hasPermission("vibesindev.admin")) {
+            deny(sender);
+            return;
+        }
+        if (args.length >= 2 && args[1].equalsIgnoreCase("stats")) {
+            String[] statsArgs = Arrays.copyOfRange(args, 1, args.length);
+            recStatsCommand(sender, statsArgs);
+            return;
+        }
+        sender.sendMessage(ChatColor.RED + "Usage: /music rec stats [days]");
+    }
+
+    private void recStatsCommand(CommandSender sender, String[] args) {
+        if (!sender.hasPermission("vibesindev.admin")) {
+            deny(sender);
+            return;
+        }
+        if (plugin.cache() == null) {
+            sender.sendMessage(ChatColor.RED + "Database cache is not available.");
+            return;
+        }
+
+        int days = 7;
+        if (args.length >= 2) {
+            try {
+                days = Math.max(1, Integer.parseInt(args[1]));
+            } catch (NumberFormatException e) {
+                sender.sendMessage(ChatColor.RED + "Invalid number of days: " + args[1]);
+                return;
+            }
+        }
+
+        int queryDays = days;
+        sender.sendMessage(ChatColor.GRAY + "Querying recommendation telemetry for the last " + queryDays + " days...");
+        CompletableFuture.runAsync(() -> {
+            try {
+                dev.vibesindev.vibesmusic.cache.TrackCache.TelemetryStats stats = plugin.cache().getRecommendationStats(queryDays);
+                if (stats == null || stats.totalImpressions() == 0) {
+                    sender.sendMessage(ChatColor.YELLOW + "No recommendation impressions recorded in the last " + queryDays + " days.");
+                    return;
+                }
+
+                sender.sendMessage(ChatColor.GOLD + "=== Recommendation Engine Telemetry (Last " + queryDays + "d) ===");
+                sender.sendMessage(ChatColor.GRAY + "Total Impressions: " + ChatColor.WHITE + stats.totalImpressions()
+                        + ChatColor.GRAY + " (v2: " + ChatColor.GREEN + stats.v2Count()
+                        + ChatColor.GRAY + ", v1: " + ChatColor.YELLOW + stats.v1Count() + ChatColor.GRAY + ")"
+                        + ChatColor.GRAY + " | Solo: " + ChatColor.WHITE + stats.soloCount()
+                        + ChatColor.GRAY + ", Party: " + ChatColor.WHITE + stats.partyCount());
+
+                sender.sendMessage(ChatColor.GRAY + "Listening Outcomes: " + ChatColor.WHITE + stats.totalOutcomes()
+                        + ChatColor.GRAY + " (Completed: " + ChatColor.GREEN + String.format(java.util.Locale.ROOT, "%.1f%%", stats.completionRate() * 100)
+                        + ChatColor.GRAY + " [" + stats.completedCount() + "], Early Skip: " + ChatColor.RED + String.format(java.util.Locale.ROOT, "%.1f%%", stats.earlySkipRate() * 100)
+                        + ChatColor.GRAY + " [" + stats.earlySkipCount() + "], Late Skip: " + ChatColor.YELLOW + stats.lateSkipCount() + ")");
+
+                sender.sendMessage(ChatColor.GRAY + "Latency (ms): " + ChatColor.AQUA + "p50=" + stats.p50LatencyMs() + "ms"
+                        + ChatColor.GRAY + ", " + ChatColor.AQUA + "p95=" + stats.p95LatencyMs() + "ms");
+
+                if (!stats.modeCounts().isEmpty()) {
+                    StringBuilder sb = new StringBuilder();
+                    stats.modeCounts().forEach((k, v) -> sb.append(k).append(": ").append(v).append("  "));
+                    sender.sendMessage(ChatColor.GRAY + "Modes: " + ChatColor.WHITE + sb.toString().trim());
+                }
+
+                if (!stats.sourceCounts().isEmpty()) {
+                    StringBuilder sb = new StringBuilder();
+                    stats.sourceCounts().forEach((k, v) -> sb.append(k).append(": ").append(v).append("  "));
+                    sender.sendMessage(ChatColor.GRAY + "Selected Sources: " + ChatColor.WHITE + sb.toString().trim());
+                }
+
+                if (!stats.relaxationLevels().isEmpty()) {
+                    StringBuilder sb = new StringBuilder();
+                    stats.relaxationLevels().forEach((k, v) -> sb.append(k).append(": ").append(v).append("  "));
+                    sender.sendMessage(ChatColor.GRAY + "Relaxation: " + ChatColor.WHITE + sb.toString().trim());
+                }
+            } catch (Exception e) {
+                sender.sendMessage(ChatColor.RED + "Failed to retrieve telemetry stats: " + e.getMessage());
+            }
+        });
+    }
+
     private void help(
             CommandSender sender
     ) {
@@ -2353,7 +2482,10 @@ public final class MusicCommand
                             "debug",
                             "history",
                             "volume",
-                            "playlist"
+                            "playlist",
+                            "why",
+                            "rec",
+                            "recstats"
                     ),
                     args[0]
             );
@@ -2397,6 +2529,18 @@ public final class MusicCommand
                     List.of("login", "book", "code", "sync", "status", "logout"),
                     args[1]
             );
+        }
+
+        if (args[0].equalsIgnoreCase("rec") && args.length == 2) {
+            return fuzzyComplete(List.of("stats"), args[1]);
+        }
+
+        if (args[0].equalsIgnoreCase("rec") && args.length == 3 && args[1].equalsIgnoreCase("stats")) {
+            return fuzzyComplete(List.of("1", "7", "14", "30"), args[2]);
+        }
+
+        if (args[0].equalsIgnoreCase("recstats") && args.length == 2) {
+            return fuzzyComplete(List.of("1", "7", "14", "30"), args[1]);
         }
 
         /*

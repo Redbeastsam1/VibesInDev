@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -16,6 +17,7 @@ import java.util.Random;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -1089,6 +1091,7 @@ public final class RecommendationEngine {
 
         List<CandidateEvaluation> chosenEligible = Collections.emptyList();
         int chosenLevel = 0;
+        Map<String, Integer> rejectionCounts = new ConcurrentHashMap<>();
 
         for (int level = 0; level <= 4; level++) {
             int curCooldownTracks = baseCooldownTracks;
@@ -1124,21 +1127,25 @@ public final class RecommendationEngine {
 
                 // 0. HARD CONSTRAINT: Active dislike ban
                 if (profile != null && profile.isDisliked(t.id())) {
+                    if (level == 0) rejectionCounts.merge("dislike", 1, Integer::sum);
                     continue;
                 }
 
                 // 1. HARD CONSTRAINT: Seed duplicate or remix/slowed/live
                 if (seed != null && PlayerTasteProfile.isSameSongOrRemix(t, seed)) {
+                    if (level == 0) rejectionCounts.merge("seed_duplicate", 1, Integer::sum);
                     continue;
                 }
 
                 // 2. HARD CONSTRAINT: CandidateFilter blacklist & duration guardrails (duration relaxed in level 4)
                 if (CandidateFilter.isHardRejected(t.title(), t.durationSeconds(), c.source(), curMinDur, curMaxDur)) {
+                    if (level == 0) rejectionCounts.merge("filter_rejected", 1, Integer::sum);
                     continue;
                 }
 
                 // 3. SOFT CONSTRAINT: Fatigue check
                 if (profile != null && profile.isFatigued(t, curCooldownTracks, curCooldownMs)) {
+                    if (level == 0) rejectionCounts.merge("fatigue", 1, Integer::sum);
                     continue;
                 }
 
@@ -1237,6 +1244,12 @@ public final class RecommendationEngine {
             }
         }
 
+        Map<String, String> fallbacks = new LinkedHashMap<>();
+        fallbacks.put("FAMILIAR", !familiarPool.isEmpty() ? "FAMILIAR" : "SIMILAR");
+        fallbacks.put("SIMILAR", "SIMILAR");
+        fallbacks.put("EXPLORE", (allowExplore && !explorePool.isEmpty()) ? "EXPLORE" : "SIMILAR");
+        String modeFallbacksJson = new com.google.gson.Gson().toJson(fallbacks);
+
         List<CandidateEvaluation> activePool;
         if (effectiveMode == RecommendationMode.FAMILIAR) {
             if (!familiarPool.isEmpty()) {
@@ -1256,9 +1269,27 @@ public final class RecommendationEngine {
             activePool = !similarPool.isEmpty() ? similarPool : chosenEligible;
         }
 
+        // Aggregate configured probability mass of all requested modes that route to effectiveMode
+        double effectiveModeProbability = 0.0;
+        for (Map.Entry<String, String> entry : fallbacks.entrySet()) {
+            if (entry.getValue().equals(effectiveMode.name())) {
+                if ("FAMILIAR".equals(entry.getKey())) effectiveModeProbability += wFam;
+                else if ("SIMILAR".equals(entry.getKey())) effectiveModeProbability += wSim;
+                else if ("EXPLORE".equals(entry.getKey())) effectiveModeProbability += (allowExplore ? wExp : 0.0);
+            }
+        }
+        double totalModeMass = wFam + wSim + (allowExplore ? wExp : 0.0);
+        if (totalModeMass > 0.0) {
+            effectiveModeProbability /= totalModeMass;
+        } else {
+            effectiveModeProbability = 1.0;
+        }
+
         double[] weights = getModeWeights(effectiveMode, plugin != null ? plugin.getConfig() : null);
 
         List<RecommendationCandidate> scored = new ArrayList<>();
+        Map<String, Map<String, Object>> candidateFeaturesMap = new HashMap<>();
+
         for (CandidateEvaluation ev : activePool) {
             double effectiveNovelty = ev.novelty;
             int candYear = extractReleaseYear(ev.candidate.track().title());
@@ -1274,6 +1305,17 @@ public final class RecommendationEngine {
                     weights, minFeatureCoverage, ev.monopolyMultiplier, ev.candidate.cachedLocally(), cacheBonusValue
             );
             if (score >= 0.0) {
+                Map<String, Object> feat = new LinkedHashMap<>();
+                feat.put("genreCosine", ev.hasGenre ? ev.genreCosine : null);
+                feat.put("artistAffinity", ev.artistAffinity);
+                feat.put("continuity", ev.continuity);
+                feat.put("familiarity", ev.familiarity);
+                feat.put("quality", ev.quality);
+                feat.put("novelty", effectiveNovelty);
+                feat.put("monopolyMultiplier", ev.monopolyMultiplier);
+                feat.put("recentRelease", hasRecent ? recentScore : null);
+                candidateFeaturesMap.put(ev.candidate.track().id(), feat);
+
                 String reason = buildExplainabilityReason(
                         effectiveMode, ev.candidate.source(),
                         ev.genreCosine, ev.hasGenre,
@@ -1284,6 +1326,8 @@ public final class RecommendationEngine {
                         ev.candidate.track(), score, ev.candidate.source(),
                         reason, ev.candidate.cachedLocally()
                 ));
+            } else {
+                rejectionCounts.merge("insufficient_features", 1, Integer::sum);
             }
         }
 
@@ -1331,13 +1375,26 @@ public final class RecommendationEngine {
             chosen = scored.get(0);
         }
 
+        // Calculate actual marginal selection propensities P(c selected)
+        double[] softmaxProbs = CandidateSelector.computeSoftmaxProbabilities(mmrList, softmaxTemp);
+        Map<String, Double> mmrSoftmaxProbMap = new HashMap<>();
+        for (int i = 0; i < mmrList.size(); i++) {
+            RecommendationCandidate cand = mmrList.get(i).candidate();
+            if (cand != null && cand.track() != null) {
+                mmrSoftmaxProbMap.put(cand.track().id(), softmaxProbs[i]);
+            }
+        }
+
+        String impressionId = UUID.randomUUID().toString();
+
         List<RankedPick> picks = new ArrayList<>();
         picks.add(new RankedPick(
                 chosen.track(),
                 effectiveMode,
                 chosen.source(),
                 chosen.reason(),
-                chosen.score()
+                chosen.score(),
+                impressionId
         ));
 
         for (CandidateSelector.MmrCandidate mmr : mmrList) {
@@ -1357,7 +1414,8 @@ public final class RecommendationEngine {
                         effectiveMode,
                         cand.source(),
                         cand.reason(),
-                        cand.score()
+                        cand.score(),
+                        impressionId
                 ));
             }
         }
@@ -1365,39 +1423,64 @@ public final class RecommendationEngine {
         long elapsed = System.currentTimeMillis() - startTime;
         if (plugin != null && plugin.cache() != null) {
             List<TrackCache.CandidateTelemetry> telemList = new ArrayList<>();
-            for (int i = 0; i < picks.size(); i++) {
-                RankedPick p = picks.get(i);
+            Set<String> loggedIds = new HashSet<>();
+            int topLimit = Math.min(20, scored.size());
+            for (int i = 0; i < topLimit; i++) {
+                RecommendationCandidate sc = scored.get(i);
+                String tid = sc.track().id();
+                loggedIds.add(tid);
+                double probInMode = mmrSoftmaxProbMap.getOrDefault(tid, 0.0);
+                double selectionProbability = effectiveModeProbability * probInMode;
+                boolean isSelected = chosen.track().id().equals(tid);
+                String featsJson = new com.google.gson.Gson().toJson(candidateFeaturesMap.getOrDefault(tid, Collections.emptyMap()));
                 telemList.add(new TrackCache.CandidateTelemetry(
-                        p.track().id(),
+                        tid,
                         i + 1,
-                        p.source().name(),
-                        p.score(),
-                        p.score(),
+                        sc.source().name(),
+                        sc.score(),
+                        sc.score(),
                         null,
-                        1.0 / (i + 1),
-                        i == 0,
-                        "{}"
+                        selectionProbability,
+                        isSelected,
+                        featsJson
                 ));
             }
+            if (!loggedIds.contains(chosen.track().id())) {
+                double probInMode = mmrSoftmaxProbMap.getOrDefault(chosen.track().id(), 0.0);
+                double selectionProbability = effectiveModeProbability * probInMode;
+                String featsJson = new com.google.gson.Gson().toJson(candidateFeaturesMap.getOrDefault(chosen.track().id(), Collections.emptyMap()));
+                telemList.add(new TrackCache.CandidateTelemetry(
+                        chosen.track().id(),
+                        topLimit + 1,
+                        chosen.source().name(),
+                        chosen.score(),
+                        chosen.score(),
+                        null,
+                        selectionProbability,
+                        true,
+                        featsJson
+                ));
+            }
+
             plugin.cache().logRecImpression(
-                    UUID.randomUUID().toString(),
+                    impressionId,
                     System.currentTimeMillis(),
                     profile != null ? profile.getPlayerUuid() : null,
                     null,
                     seed != null ? seed.id() : null,
                     "v2",
-                    null,
+                    "heuristic",
                     requestedMode.name(),
                     effectiveMode.name(),
-                    modeProb,
-                    "[]",
+                    effectiveModeProbability,
+                    modeFallbacksJson,
                     chosenLevel,
                     candidates.size(),
                     chosenEligible.size(),
-                    "{}",
+                    new com.google.gson.Gson().toJson(rejectionCounts),
                     "{}",
                     elapsed,
-                    picks.get(0).track().id(),
+                    chosen.track().id(),
                     telemList
             );
         }

@@ -258,7 +258,7 @@ public class GenreResolver {
                 HttpRequest req = HttpRequest.newBuilder()
                         .uri(URI.create(url))
                         .timeout(Duration.ofSeconds(5))
-                        .header("User-Agent", "VibesInDev-Minecraft-Plugin/0.7.0")
+                        .header("User-Agent", "VibesInDev-Minecraft-Plugin/0.8.0")
                         .GET()
                         .build();
 

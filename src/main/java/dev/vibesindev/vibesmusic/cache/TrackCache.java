@@ -1287,6 +1287,100 @@ public final class TrackCache {
         });
     }
 
+    public record TelemetryStats(
+            int totalImpressions,
+            int v2Count,
+            int v1Count,
+            int soloCount,
+            int partyCount,
+            int totalOutcomes,
+            int completedCount,
+            int earlySkipCount,
+            int lateSkipCount,
+            double completionRate,
+            double earlySkipRate,
+            long p50LatencyMs,
+            long p95LatencyMs,
+            Map<String, Integer> modeCounts,
+            Map<String, Integer> sourceCounts,
+            Map<String, Integer> relaxationLevels
+    ) {}
+
+    public TelemetryStats getRecommendationStats(int lastDays) {
+        long cutoff = System.currentTimeMillis() - (Math.max(1, lastDays) * 86_400_000L);
+        int total = 0, v2 = 0, v1 = 0, solo = 0, party = 0;
+        int completed = 0, earlySkip = 0, lateSkip = 0;
+        List<Long> latencies = new ArrayList<>();
+        Map<String, Integer> modeCounts = new HashMap<>();
+        Map<String, Integer> relaxationLevels = new HashMap<>();
+        Map<String, Integer> sourceCounts = new HashMap<>();
+
+        String imprSql = "SELECT engine_version, party_uuid, effective_mode, relaxation_level, latency_ms, outcome " +
+                         "FROM rec_impressions WHERE ts >= ?";
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(imprSql)) {
+            ps.setLong(1, cutoff);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    total++;
+                    String eng = rs.getString("engine_version");
+                    if ("v2".equalsIgnoreCase(eng)) v2++; else v1++;
+                    String partyUuid = rs.getString("party_uuid");
+                    if (partyUuid != null && !partyUuid.isBlank()) party++; else solo++;
+
+                    String mode = rs.getString("effective_mode");
+                    if (mode != null) modeCounts.merge(mode, 1, Integer::sum);
+
+                    int lvl = rs.getInt("relaxation_level");
+                    relaxationLevels.merge("L" + lvl, 1, Integer::sum);
+
+                    latencies.add(rs.getLong("latency_ms"));
+
+                    String outcome = rs.getString("outcome");
+                    if (outcome != null) {
+                        if ("COMPLETED".equalsIgnoreCase(outcome)) completed++;
+                        else if ("SKIPPED_EARLY".equalsIgnoreCase(outcome)) earlySkip++;
+                        else if ("SKIPPED_LATE".equalsIgnoreCase(outcome)) lateSkip++;
+                    }
+                }
+            }
+
+            String candSql = "SELECT c.source, count(*) as cnt FROM rec_candidates c " +
+                             "JOIN rec_impressions i ON c.impression_id = i.impression_id " +
+                             "WHERE c.selected = 1 AND i.ts >= ? GROUP BY c.source";
+            try (PreparedStatement ps2 = conn.prepareStatement(candSql)) {
+                ps2.setLong(1, cutoff);
+                try (ResultSet rs2 = ps2.executeQuery()) {
+                    while (rs2.next()) {
+                        String src = rs2.getString("source");
+                        if (src != null) sourceCounts.put(src, rs2.getInt("cnt"));
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            if (plugin != null) {
+                plugin.getLogger().warning("[VibesInDev] Error fetching recommendation stats: " + e.getMessage());
+            }
+        }
+
+        Collections.sort(latencies);
+        long p50 = 0, p95 = 0;
+        if (!latencies.isEmpty()) {
+            p50 = latencies.get((int) (latencies.size() * 0.50));
+            p95 = latencies.get((int) Math.min(latencies.size() - 1, (int) (latencies.size() * 0.95)));
+        }
+
+        int totalEvaluatedOutcomes = completed + earlySkip + lateSkip;
+        double compRate = totalEvaluatedOutcomes > 0 ? (double) completed / totalEvaluatedOutcomes : 0.0;
+        double skipRate = totalEvaluatedOutcomes > 0 ? (double) earlySkip / totalEvaluatedOutcomes : 0.0;
+
+        return new TelemetryStats(
+                total, v2, v1, solo, party,
+                totalEvaluatedOutcomes, completed, earlySkip, lateSkip,
+                compRate, skipRate, p50, p95,
+                modeCounts, sourceCounts, relaxationLevels
+        );
+    }
+
     public void savePlayerSpotifyTracks(UUID playerUuid, String source, List<Track> tracks) {
         if (playerUuid == null || source == null || tracks == null || tracks.isEmpty()) return;
         long now = System.currentTimeMillis();

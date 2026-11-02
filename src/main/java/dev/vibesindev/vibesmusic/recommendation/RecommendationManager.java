@@ -47,6 +47,27 @@ public final class RecommendationManager implements org.bukkit.event.Listener {
         this.enricher = new ArtistLineageEnricher(plugin);
         this.engine = (engine != null) ? engine : new RecommendationEngine(plugin, this.genreResolver);
         loadConfiguredLineages();
+        initTelemetryPruning();
+    }
+
+    private void initTelemetryPruning() {
+        if (plugin != null && plugin.cache() != null) {
+            int retentionDays = (plugin.getConfig() != null)
+                    ? plugin.getConfig().getInt("recommendations.telemetry.retention-days", 30) : 30;
+            CompletableFuture.runAsync(() -> plugin.cache().pruneRecTelemetry(retentionDays));
+            if (org.bukkit.Bukkit.getServer() != null) {
+                try {
+                    org.bukkit.Bukkit.getScheduler().runTaskTimerAsynchronously(
+                            plugin,
+                            () -> plugin.cache().pruneRecTelemetry(retentionDays),
+                            20L * 3600 * 24,
+                            20L * 3600 * 24
+                    );
+                } catch (Exception ignored) {
+                    // Ignored in unit test environments without bukkit scheduler
+                }
+            }
+        }
     }
 
     public void setEngine(RecommendationEngine engine) {
@@ -352,7 +373,30 @@ public final class RecommendationManager implements org.bukkit.event.Listener {
 
         UUID targetUuid = (party != null && party.getMemberCount() > 1) ? party.getPartyId() : playerUuid;
         SessionContext sessionContext = getOrCreateSessionContext(targetUuid);
-        return engine.recommendNextRanked(seed, profile, sessionContext);
+        CompletableFuture<List<RankedPick>> future = (engine != null)
+                ? engine.recommendNextRanked(seed, profile, sessionContext)
+                : CompletableFuture.completedFuture(Collections.emptyList());
+        if (future == null) {
+            return CompletableFuture.completedFuture(Collections.emptyList());
+        }
+        return future.thenApply(picks -> {
+                    if (picks != null && !picks.isEmpty()) {
+                        RankedPick top = picks.get(0);
+                        setLastAutoplayPick(targetUuid, top);
+                        if (top.impressionId() != null) {
+                            setActiveImpression(targetUuid, top.impressionId());
+                        }
+                        if (party != null && party.getMemberCount() > 1) {
+                            for (UUID m : party.getMembers()) {
+                                setLastAutoplayPick(m, top);
+                                if (top.impressionId() != null) {
+                                    setActiveImpression(m, top.impressionId());
+                                }
+                            }
+                        }
+                    }
+                    return picks;
+                });
     }
 
     // =========================================================
@@ -487,12 +531,16 @@ public final class RecommendationManager implements org.bukkit.event.Listener {
         saveProfileSync(playerUuid);
         sessionContexts.remove(playerUuid);
         sessionSpotifyHinted.remove(playerUuid);
+        activeImpressionIds.remove(playerUuid);
+        lastAutoplayPicks.remove(playerUuid);
     }
 
     public void onPartyDisband(UUID partyUuid) {
         partyAutoplayStates.remove(partyUuid);
         sessionContexts.remove(partyUuid);
         partyPickCounters.remove(partyUuid);
+        activeImpressionIds.remove(partyUuid);
+        lastAutoplayPicks.remove(partyUuid);
     }
 
     private void loadConfiguredLineages() {

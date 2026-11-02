@@ -1345,7 +1345,7 @@ public final class RecommendationEngine {
                 similarPool.add(eval);
             }
             if (eval.artistAffinity < 0.2 && eval.continuity >= exploreMinContinuity
-                    && (profile == null || !profile.isRecentArtist(t.artist()))) {
+                    && (profile == null || profile.getRecentArtistCount(t.artist()) == 0)) {
                 explorePool.add(eval);
             }
         }

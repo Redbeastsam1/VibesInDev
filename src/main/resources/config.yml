@@ -1,3 +1,10 @@
+# ==============================================================================
+# VibesInDev Configuration File
+# Version: 2
+# ==============================================================================
+
+config-version: 2
+
 tools:
   yt-dlp: 'C:\Users\Samanyu S Barna\Desktop\Youtube downloader\yt-dlp.exe'
   ffmpeg: "ffmpeg"
@@ -37,9 +44,14 @@ spotify:
   client-secret: ""
   # redirect-uri is only used if you run /music spotify login for private playlists.
   redirect-uri: "http://127.0.0.1:8888/callback"
-  # Optional local callback server (set enabled: false for 100% portless zero-port-forwarding mode)
+  # Webserver settings for local OAuth browser loopback callback
+  # SECURITY NOTICE:
+  # Loopback ("127.0.0.1") is intended for same-host browser callbacks.
+  # Remote Minecraft hosts require a deliberately configured public HTTPS callback/reverse proxy
+  # or a supported manual code flow (/music spotify code). Do NOT expose by simply binding 0.0.0.0.
   webserver:
     enabled: true
+    bind-address: "127.0.0.1"
     port: 8888
     timeout-seconds: 120
   # ISO 3166-1 alpha-2 market code (affects track availability)
@@ -61,62 +73,32 @@ playback:
     max-drift-ms: 750
   preload-next: true
 
+# ==============================================================================
+# Recommendation & Continuous Autoplay Engine v2
+# ==============================================================================
 recommendations:
-  # Optional custom artist lineage mappings (server owners can link any bands & solo artists)
-  lineage:
-    # "one direction": ["harry styles", "zayn", "niall horan", "louis tomlinson", "liam payne"]
-    # "bts": ["jungkook", "jimin", "v", "rm", "suga", "j-hope", "jin"]
-    # "blackpink": ["jennie", "rosé", "lisa", "jisoo"]
-  # Enable continuous autoplay by default when a player's or party's queue runs empty
-  autoplay-default: true
-  # Epsilon-greedy discovery ratio (exploration vs exploitation)
-  exploration-ratio: 0.20
-  # Time decay (Task 3.1)
-  affinity-half-life-days: 30
-  # Party least-misery blending and leader rotation (Task 3.3)
-  party:
-    misery-lambda: 0.5
-    rotate-leader: false
-    rotate-leader-interval: 3
-  # Avoid repeating tracks heard in the last N songs
-  cooldown-tracks: 20
-  cooldown-minutes: 45
-  # Duration bounds for recommended candidates (in seconds)
-  min-duration-seconds: 60
-  max-duration-seconds: 600
-  # Automatically sync Spotify taste profile when a player links their account
-  spotify-sync-on-login: true
-  # Scoring bonus for already-cached tracks
-  cache-bonus: 0.05
-  # Start preloading when this percent of track remains
-  preload-threshold-pct: 15
-  # Monopoly penalty vs continuity over the last N plays
-  monopoly:
-    window: 4
-    multipliers:
-      - 1.00 # 0 plays
-      - 0.80 # 1 play
-      - 0.40 # 2 plays
-      - 0.15 # 3+ plays
-  # Feedback signal gains with diminishing returns
-  signals:
-    completion-gain: 0.08
-    playlist-add-gain: 0.20
-    like-gain: 0.25
-    artist-skip-penalty: 0.10
-    dislike-artist-factor: 0.15
-  # Engine v2 settings and staged rollout (Task 2.10)
-  # When engine-v2 is true, v2 is forced for all players.
-  # When engine-v2 is false, rollout-percent (0-100) gates v2 per player/party hash bucket.
-  engine-v2: false
+  # Global toggle for Recommendation Engine v2
+  # When true, all players receive Engine v2 recommendations.
+  # When false, engine-v2-rollout-percent determines staged hash-based rollout.
+  engine-v2: true
   engine-v2-rollout-percent: 0
-  genre-sample-temperature: 1.0
-  per-genre-limit: 12
-  # Mode distribution and per-mode ranking weights (Task 2.5)
+
+  # Continuous autoplay default state for players joining the server
+  autoplay-default: true
+
+  # Mode mixture probabilities (must sum to 1.0)
+  # Familiar (30%): Relies on user library, liked tracks, top artists
+  # Similar  (50%): Harmonic genre & style continuity from current seed
+  # Explore  (20%): Novel tracks and discovery roulette
   modes:
     familiar: 0.30
     similar: 0.50
     explore: 0.20
+
+  # Minimum continuity threshold required to qualify for Explore mode
+  explore-min-continuity: 0.45
+
+  # Per-mode scoring weights (genre, artist, continuity, familiarity, quality, novelty)
   mode-weights:
     familiar:
       genre: 0.10
@@ -139,13 +121,142 @@ recommendations:
       familiarity: 0.00
       quality: 0.15
       novelty: 0.35
-  explore-min-continuity: 0.45
-  min-feature-coverage: 0.35
-  # MMR diversity and softmax sampling (Task 2.8)
+
+  # Scoring bonus for tracks already present in local disk cache (prevents latency spikes)
+  cache-bonus: 0.02
+
+  # Maximal Marginal Relevance (MMR) and Softmax candidate sampling
+  # mmr-lambda: 1.0 = pure relevance, 0.0 = maximal diversity against last 5 plays
   mmr-lambda: 0.70
+  # Temperature for Boltzmann softmax distribution (0.0 = greedy argmax, >0 = stochastic)
   softmax-temperature: 0.08
-  # Relaxation ladder (Task 2.9)
+  softmax-top-k: 8
+
+  # Candidate sourcing timeouts (ms)
+  stream-timeout-ms: 3000
+  total-timeout-ms: 6000
+
+  # Dedicated provider thread pool for parallel candidate fetching
+  provider-executors:
+    threads: 4
+    queue-capacity: 32
+    max-concurrent-per-provider: 2
+
+  # Feature coverage & confidence flooring
+  feature-coverage:
+    min-features: 2
+    min-weight-coverage: 0.35
+    confidence-floor: 0.85
+
+  # Relaxation ladder settings (gradual constraint softening L0 -> L4 on empty candidate pools)
   min-eligible: 3
-  # External metadata enrichment (optional)
+  relaxation:
+    enabled: true
+    max-level: 4
+
+  # Taste profile recency half-life in days (exponential decay for play counts & affinities)
+  affinity-half-life-days: 30
+
+  # Candidate pool limits
+  genre-sample-temperature: 1.0
+  candidate-pool:
+    per-genre-limit: 12
+    familiar-cap: 15
+    max-total: 120
+
+  # Exploration ratio settings and adaptive tuning
+  exploration-ratio: 0.20
+  exploration:
+    adaptive: false
+    min: 0.05
+    max: 0.40
+    min-outcomes: 10
+
+  # Baseline familiarity signal scores
+  familiarity:
+    liked-track: 1.00
+    completed-track: 0.90
+    spotify-top-track: 0.80
+    frequent-artist: 0.70
+    familiar-genre: 0.40
+
+  # Feedback signal gains with diminishing returns: a += g * (1 - a)
+  signals:
+    completion-gain: 0.08
+    playlist-add-gain: 0.20
+    like-gain: 0.25
+    artist-skip-penalty: 0.10
+    dislike-artist-factor: 0.15
+
+  # Monopoly penalty table across the last N plays
+  monopoly:
+    window: 4
+    multipliers:
+      - 1.00 # 0 prior plays in window
+      - 0.80 # 1 prior play in window
+      - 0.40 # 2 prior plays in window
+      - 0.15 # 3+ prior plays in window
+
+  # Party listening settings
+  party:
+    # Least-misery parameter lambda: Blended = (1 - lambda) * mean + lambda * min
+    misery-lambda: 0.5
+    rotate-leader: false
+    rotate-leader-interval: 3
+
+  # Custom artist lineage mappings (bands, solo projects, aliases)
+  lineage:
+    # "one direction": ["harry styles", "zayn", "niall horan", "louis tomlinson", "liam payne"]
+    # "bts": ["jungkook", "jimin", "v", "rm", "suga", "j-hope", "jin"]
+    # "blackpink": ["jennie", "rosé", "lisa", "jisoo"]
+
+  # Extra protected artist names that contain separators (e.g. "Simon & Garfunkel")
+  artist-name-protect: []
+
+  # Spotify familiar track ingestion
+  spotify-familiar:
+    enabled: true
+    saved-tracks-limit: 100
+    refresh-hours: 24
+
+  # External metadata enrichment (Last.fm & MusicBrainz)
   external:
     lastfm-api-key: ""
+    musicbrainz-enabled: false
+
+  # Candidate-level telemetry logging, propensity recording, and automatic pruning
+  telemetry:
+    enabled: true
+    retention-days: 30
+    top-n-logged: 20
+
+  # Staged rollout policy
+  rollout:
+    stages: [0, 5, 25, 50, 100]
+    require-human-approval: true
+
+  # Offline learned ranker settings (trained via tools/fit_ranker.py)
+  ranker:
+    weights-file: ""
+    shadow: true
+    blend-alpha: 0.5
+    min-labeled-outcomes: 2000
+
+  # Minecraft gameplay context awareness (environmental energy biasing)
+  context:
+    enabled: false
+    weight: 0.08
+
+  # Anti-fatigue cooldowns
+  cooldown-tracks: 20
+  cooldown-minutes: 45
+
+  # Duration bounds for recommended candidates (in seconds)
+  min-duration-seconds: 60
+  max-duration-seconds: 600
+
+  # Automatically sync Spotify taste profile when a player links their account
+  spotify-sync-on-login: true
+
+  # Start preloading when this percent of track remains
+  preload-threshold-pct: 15

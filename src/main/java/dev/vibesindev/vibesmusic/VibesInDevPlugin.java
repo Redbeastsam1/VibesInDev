@@ -53,6 +53,11 @@ public final class VibesInDevPlugin
 
         saveDefaultConfig();
 
+        int configVer = getConfig().getInt("config-version", 1);
+        if (configVer < 2) {
+            getLogger().info("[VibesInDev] Running on config-version " + configVer + ". Active recommendation features upgraded to Recommendation Engine v2 standards.");
+        }
+
         cache =
                 new TrackCache(this);
 

@@ -706,8 +706,8 @@ public final class SpotifyClient {
                 try {
 
                     int port = redirect.getPort() > 0 ? redirect.getPort() : 8888;
-
-                    callbackServer = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
+                    String bindAddress = plugin.getConfig().getString("spotify.webserver.bind-address", "127.0.0.1");
+                    callbackServer = HttpServer.create(new InetSocketAddress(bindAddress, port), 0);
 
                     callbackServer.createContext(redirect.getPath(), exchange -> handleCallback(exchange, state, player));
 

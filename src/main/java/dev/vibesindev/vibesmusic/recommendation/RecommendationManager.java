@@ -160,7 +160,8 @@ public final class RecommendationManager implements org.bukkit.event.Listener {
                     snapshot.dislikes(),
                     snapshot.lineage(),
                     snapshot.lastSync(),
-                    snapshot.affinityTimestamps()
+                    snapshot.affinityTimestamps(),
+                    snapshot.exploreRatio()
             );
         }
 
@@ -245,6 +246,16 @@ public final class RecommendationManager implements org.bukkit.event.Listener {
             MusicParty party = (plugin != null && plugin.parties() != null) ? plugin.parties().getPartyByPlayer(playerUuid) : null;
             if (party != null && party.getMemberCount() > 1) {
                 getOrCreateSessionContext(party.getPartyId()).recordCompletedTrack(track, cachedGenres, 0, null);
+            }
+        }
+
+        // Task 5.3: Adaptive exploration tuning
+        RankedPick lastPick = lastAutoplayPicks.get(playerUuid);
+        if (lastPick != null && track.id() != null && track.id().equals(lastPick.track().id())) {
+            boolean adaptive = (plugin != null && plugin.getConfig() != null)
+                    && plugin.getConfig().getBoolean("recommendations.exploration.adaptive", false);
+            if (adaptive && lastPick.mode() == RecommendationMode.EXPLORE) {
+                profile.recordExploreOutcome(outcome, plugin != null ? plugin.getConfig() : null);
             }
         }
 
@@ -509,7 +520,8 @@ public final class RecommendationManager implements org.bukkit.event.Listener {
                 profile.exportLineageJson(),
                 profile.getLastSyncTimestamp(),
                 profile.exportGenreMassJson(),
-                profile.exportAffinityTimestampsJson()
+                profile.exportAffinityTimestampsJson(),
+                profile.getExploreRatio()
         );
     }
 

@@ -1050,6 +1050,19 @@ public final class RecommendationEngine {
         double wSim = plugin != null && plugin.getConfig() != null ? plugin.getConfig().getDouble("recommendations.modes.similar", 0.50) : 0.50;
         double wExp = plugin != null && plugin.getConfig() != null ? plugin.getConfig().getDouble("recommendations.modes.explore", 0.20) : 0.20;
 
+        boolean adaptiveExplore = plugin != null && plugin.getConfig() != null
+                && plugin.getConfig().getBoolean("recommendations.exploration.adaptive", false);
+        if (adaptiveExplore && profile != null) {
+            double adaptedExp = profile.getExploreRatio();
+            if (adaptedExp > 0.0) {
+                wExp = adaptedExp;
+                double remaining = Math.max(0.0, 1.0 - wExp);
+                double baseRest = (wFam + wSim) > 0.0 ? (wFam + wSim) : 0.80;
+                wFam = remaining * (wFam / baseRest);
+                wSim = remaining * (wSim / baseRest);
+            }
+        }
+
         int sessionTracks = profile != null ? profile.getFatigueHistory().size() : 0;
         boolean allowExplore = sessionTracks >= 3;
         RecommendationMode requestedMode = sampleMode(wFam, wSim, wExp, allowExplore, rng);

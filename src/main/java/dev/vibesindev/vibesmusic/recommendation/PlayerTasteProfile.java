@@ -90,6 +90,58 @@ public final class PlayerTasteProfile {
     /** Total plays count for cold-start detection. */
     private int totalPlays = 0;
 
+    /** Adaptive exploration probability ratio (clamped between 0.05 and 0.40). Default 0.20. */
+    private double exploreRatio = 0.20;
+
+    /** Count of meaningful outcomes in EXPLORE mode. */
+    private int exploreOutcomesCount = 0;
+
+    public double getExploreRatio() {
+        return exploreRatio;
+    }
+
+    public void setExploreRatio(double exploreRatio) {
+        this.exploreRatio = Math.max(0.05, Math.min(0.40, exploreRatio));
+    }
+
+    public int getExploreOutcomesCount() {
+        return exploreOutcomesCount;
+    }
+
+    public void setExploreOutcomesCount(int count) {
+        this.exploreOutcomesCount = Math.max(0, count);
+    }
+
+    public synchronized void recordExploreOutcome(
+            RecommendationManager.Outcome outcome,
+            org.bukkit.configuration.ConfigurationSection config
+    ) {
+        if (outcome == null) return;
+        if (outcome == RecommendationManager.Outcome.AFK_OR_UNKNOWN
+                || outcome == RecommendationManager.Outcome.DISCONNECTED
+                || outcome == RecommendationManager.Outcome.MANUAL_STOP
+                || outcome == RecommendationManager.Outcome.REPEATED
+                || outcome == RecommendationManager.Outcome.REQUEUED) {
+            return;
+        }
+
+        int minOutcomes = (config != null)
+                ? config.getInt("recommendations.exploration.min-outcomes", 10) : 10;
+        double minRatio = (config != null)
+                ? config.getDouble("recommendations.exploration.min", 0.05) : 0.05;
+        double maxRatio = (config != null)
+                ? config.getDouble("recommendations.exploration.max", 0.40) : 0.40;
+
+        exploreOutcomesCount++;
+        if (exploreOutcomesCount >= minOutcomes) {
+            if (outcome == RecommendationManager.Outcome.COMPLETED) {
+                this.exploreRatio = Math.min(maxRatio, this.exploreRatio + 0.01);
+            } else if (outcome == RecommendationManager.Outcome.SKIPPED_EARLY) {
+                this.exploreRatio = Math.max(minRatio, this.exploreRatio - 0.01);
+            }
+        }
+    }
+
     /** Per-profile dynamic lineage learned from Spotify related artists or user sessions. */
     private final Map<String, Set<String>> dynamicLineage = new ConcurrentHashMap<>();
     private final Map<String, Map<String, Double>> dynamicLineageWeights = new ConcurrentHashMap<>();
@@ -1354,6 +1406,23 @@ public final class PlayerTasteProfile {
         }
         this.cachedGenreDistribution = null;
         invalidateAffinityCache();
+    }
+
+    public synchronized void restoreFromSnapshot(
+            Map<String, Double> affinities,
+            Map<String, Double> legacyGenres,
+            Map<String, Double> playMass,
+            Map<String, Double> spotifyMass,
+            Map<String, Long> dislikes,
+            Map<String, Set<String>> lineage,
+            long lastSync,
+            Map<String, Long> affinityTimestamps,
+            Double exploreRatio
+    ) {
+        restoreFromSnapshot(affinities, legacyGenres, playMass, spotifyMass, dislikes, lineage, lastSync, affinityTimestamps);
+        if (exploreRatio != null && exploreRatio > 0.0) {
+            this.exploreRatio = Math.max(0.05, Math.min(0.40, exploreRatio));
+        }
     }
 
     public synchronized List<FatigueEntry> getFatigueHistory() {

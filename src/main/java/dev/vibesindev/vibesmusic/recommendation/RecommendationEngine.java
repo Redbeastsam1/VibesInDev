@@ -286,22 +286,47 @@ public final class RecommendationEngine {
         }
         return CompletableFuture.supplyAsync(() -> {
             List<Track> trending = plugin.cache().getTrendingTracks(10);
-            if (trending != null && !trending.isEmpty()) {
-                List<Track> snapshot = new ArrayList<>(trending);
-                int cooldownTracks = plugin.getConfig() != null ? plugin.getConfig().getInt("recommendations.cooldown-tracks", 20) : 20;
-                long cooldownMs = (plugin.getConfig() != null ? plugin.getConfig().getLong("recommendations.cooldown-minutes", 45) : 45) * 60_000L;
-                for (Track t : snapshot) {
-                    if (t == null) continue;
-                    if (seed != null && PlayerTasteProfile.isSameSongOrRemix(t, seed)) {
-                        continue;
-                    }
-                    if (profile != null && profile.isFatigued(t, cooldownTracks, cooldownMs)) {
-                        continue;
-                    }
-                    return t;
-                }
-                return snapshot.get(0);
+            if (trending == null || trending.isEmpty()) {
+                return null;
             }
+            List<Track> snapshot = new ArrayList<>(trending);
+            int cooldownTracks = plugin.getConfig() != null ? plugin.getConfig().getInt("recommendations.cooldown-tracks", 20) : 20;
+            long cooldownMs = (plugin.getConfig() != null ? plugin.getConfig().getLong("recommendations.cooldown-minutes", 45) : 45) * 60_000L;
+
+            // Tier 1: Strict filters (full cooldown window + strict seed/remix rejection)
+            for (Track t : snapshot) {
+                if (t == null) continue;
+                if (seed != null && PlayerTasteProfile.isSameSongOrRemix(t, seed)) {
+                    continue;
+                }
+                if (profile != null && profile.isFatigued(t, cooldownTracks, cooldownMs)) {
+                    continue;
+                }
+                return t;
+            }
+
+            // Tier 2: Soft relaxation ladder (relax cooldown to last 5 tracks & 15m, STILL strictly reject seed/remixes)
+            for (Track t : snapshot) {
+                if (t == null) continue;
+                if (seed != null && PlayerTasteProfile.isSameSongOrRemix(t, seed)) {
+                    continue;
+                }
+                if (profile != null && profile.isFatigued(t, 5, 15 * 60_000L)) {
+                    continue;
+                }
+                return t;
+            }
+
+            // Tier 3: Complete fatigue relaxation BUT NEVER repeat seed track or its remixes
+            for (Track t : snapshot) {
+                if (t == null) continue;
+                if (seed != null && PlayerTasteProfile.isSameSongOrRemix(t, seed)) {
+                    continue;
+                }
+                return t;
+            }
+
+            // If ALL tracks in trending are variants/remixes of the seed, return null rather than looping the seed
             return null;
         }, providerExecutor);
     }

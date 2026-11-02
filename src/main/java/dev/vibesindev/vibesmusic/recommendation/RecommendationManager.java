@@ -19,7 +19,7 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Central coordinator for the autoplay recommendation system and taste profile management.
  */
-public final class RecommendationManager {
+public final class RecommendationManager implements org.bukkit.event.Listener {
 
     private final VibesInDevPlugin plugin;
     private final RecommendationEngine engine;
@@ -50,39 +50,86 @@ public final class RecommendationManager {
     /**
      * Gets or creates the taste profile for a player, bootstrapping from SQLite history if needed.
      */
+    /**
+     * Gets or creates the taste profile in-memory without blocking Bukkit's main thread on SQLite.
+     */
     public PlayerTasteProfile getOrCreateProfile(UUID playerUuid) {
-        return tasteProfiles.computeIfAbsent(playerUuid, uuid -> {
-            PlayerTasteProfile profile = new PlayerTasteProfile(uuid);
-            if (plugin.cache() != null) {
-                // 1. Restore persistent profile snapshot from SQLite
-                dev.vibesindev.vibesmusic.cache.TrackCache.TasteProfileSnapshot snapshot = plugin.cache().loadTasteProfile(uuid);
-                if (snapshot != null) {
-                    profile.restoreFromSnapshot(
-                            snapshot.affinities(),
-                            snapshot.genres(),
-                            snapshot.dislikes(),
-                            snapshot.lineage(),
-                            snapshot.lastSync()
-                    );
-                }
+        if (playerUuid == null) return null;
+        PlayerTasteProfile existing = tasteProfiles.get(playerUuid);
+        if (existing != null) {
+            return existing;
+        }
 
-                // 2. Restore recent fatigue cooldowns from SQLite (within last 45 mins)
-                List<PlayerTasteProfile.FatigueEntry> recentFatigue = plugin.cache().getRecentFatigueHistory(uuid, 50, 45 * 60_000L);
-                if (recentFatigue != null && !recentFatigue.isEmpty()) {
-                    profile.restoreFatigue(recentFatigue);
-                }
+        PlayerTasteProfile fresh = new PlayerTasteProfile(playerUuid);
+        PlayerTasteProfile previous = tasteProfiles.putIfAbsent(playerUuid, fresh);
+        if (previous != null) {
+            return previous;
+        }
 
-                // 3. Fallback: if artist affinities are still empty, bootstrap from SQLite play history
-                if (profile.getArtistAffinities().isEmpty()) {
-                    Map<String, Integer> top = plugin.cache().getTopArtistsForPlayer(uuid, 50);
-                    if (!top.isEmpty()) {
-                        List<String> artists = new ArrayList<>(top.keySet());
-                        profile.ingestSpotifyArtists(artists, null);
-                    }
-                }
+        // Trigger async hydration if not already preloaded
+        if (plugin != null && plugin.cache() != null) {
+            CompletableFuture.runAsync(() -> hydrateProfileFromDiskSync(playerUuid, fresh));
+        }
+        return fresh;
+    }
+
+    public CompletableFuture<PlayerTasteProfile> loadProfileAsync(UUID playerUuid) {
+        if (playerUuid == null) return CompletableFuture.completedFuture(null);
+        PlayerTasteProfile cached = tasteProfiles.get(playerUuid);
+        if (cached != null) return CompletableFuture.completedFuture(cached);
+
+        if (plugin == null || plugin.cache() == null) {
+            PlayerTasteProfile fresh = new PlayerTasteProfile(playerUuid);
+            tasteProfiles.put(playerUuid, fresh);
+            return CompletableFuture.completedFuture(fresh);
+        }
+
+        return CompletableFuture.supplyAsync(() -> loadProfileFromDiskSync(playerUuid));
+    }
+
+    public PlayerTasteProfile loadProfileFromDiskSync(UUID playerUuid) {
+        if (playerUuid == null) return null;
+        PlayerTasteProfile profile = new PlayerTasteProfile(playerUuid);
+        hydrateProfileFromDiskSync(playerUuid, profile);
+        tasteProfiles.put(playerUuid, profile);
+        return profile;
+    }
+
+    private void hydrateProfileFromDiskSync(UUID playerUuid, PlayerTasteProfile profile) {
+        if (plugin == null || plugin.cache() == null || profile == null) return;
+        // 1. Restore persistent profile snapshot from SQLite
+        dev.vibesindev.vibesmusic.cache.TrackCache.TasteProfileSnapshot snapshot = plugin.cache().loadTasteProfile(playerUuid);
+        if (snapshot != null) {
+            profile.restoreFromSnapshot(
+                    snapshot.affinities(),
+                    snapshot.genres(),
+                    snapshot.dislikes(),
+                    snapshot.lineage(),
+                    snapshot.lastSync()
+            );
+        }
+
+        // 2. Restore recent fatigue cooldowns from SQLite (within last 45 mins, up to 50 tracks)
+        List<PlayerTasteProfile.FatigueEntry> recentFatigue = plugin.cache().getRecentFatigueHistory(playerUuid, 50, 45 * 60_000L);
+        if (recentFatigue != null && !recentFatigue.isEmpty()) {
+            profile.restoreFatigue(recentFatigue);
+        }
+
+        // 3. Fallback: if artist affinities are still empty, bootstrap from SQLite play history
+        if (profile.getArtistAffinities().isEmpty()) {
+            Map<String, Integer> top = plugin.cache().getTopArtistsForPlayer(playerUuid, 50);
+            if (!top.isEmpty()) {
+                List<String> artists = new ArrayList<>(top.keySet());
+                profile.ingestSpotifyArtists(artists, null);
             }
-            return profile;
-        });
+        }
+    }
+
+    @org.bukkit.event.EventHandler(priority = org.bukkit.event.EventPriority.MONITOR)
+    public void onPlayerPreLogin(org.bukkit.event.player.AsyncPlayerPreLoginEvent event) {
+        if (event.getLoginResult() == org.bukkit.event.player.AsyncPlayerPreLoginEvent.Result.ALLOWED) {
+            loadProfileAsync(event.getUniqueId());
+        }
     }
 
     /**

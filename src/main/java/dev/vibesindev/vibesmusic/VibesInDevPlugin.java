@@ -100,6 +100,9 @@ public final class VibesInDevPlugin
                             ytDlp
                     );
             getServer().getPluginManager().registerEvents(new SpotifyAuthBookListener(this), this);
+        if (recommendations != null) {
+            getServer().getPluginManager().registerEvents(recommendations, this);
+        }
         }
 
         sources =

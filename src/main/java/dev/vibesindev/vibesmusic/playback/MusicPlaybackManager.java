@@ -418,6 +418,11 @@ public final class MusicPlaybackManager {
 
         Track current = plugin.queues().current(player.getUniqueId());
         if (current != null) {
+            PlaybackSession curSession = getSession(player.getUniqueId());
+            long playedMs = curSession != null ? curSession.getPositionMs() : 0L;
+            if (plugin.recommendations() != null) {
+                plugin.recommendations().recordOutcome(player.getUniqueId(), current, playedMs, current.durationMs(), dev.vibesindev.vibesmusic.recommendation.RecommendationManager.Outcome.MANUAL_STOP);
+            }
             plugin.queues().addHistory(player.getUniqueId(), current);
         }
 
@@ -439,13 +444,21 @@ public final class MusicPlaybackManager {
 
         Track current = plugin.queues().current(uuid);
 
-        // Record skip penalty if skipped within first 30 seconds
+        // Record outcome signal for skipped track
         PlaybackSession curSession = getSession(uuid);
-        if (current != null && curSession != null && curSession.getPositionMs() < 30_000L) {
-            plugin.cache().recordTrackSkipped(uuid, current.id());
-            if (plugin.recommendations() != null) {
-                plugin.recommendations().recordSkip(uuid, current);
+        if (current != null && plugin.recommendations() != null) {
+            long playedMs = curSession != null ? curSession.getPositionMs() : 0L;
+            long durMs = current.durationMs();
+            dev.vibesindev.vibesmusic.recommendation.RecommendationManager.Outcome outcome;
+            if (durMs > 0 && playedMs >= 0.8 * durMs) {
+                outcome = dev.vibesindev.vibesmusic.recommendation.RecommendationManager.Outcome.COMPLETED;
+            } else if (playedMs < 30_000L || (durMs > 0 && playedMs < 0.1 * durMs)) {
+                outcome = dev.vibesindev.vibesmusic.recommendation.RecommendationManager.Outcome.SKIPPED_EARLY;
+                plugin.cache().recordTrackSkipped(uuid, current.id());
+            } else {
+                outcome = dev.vibesindev.vibesmusic.recommendation.RecommendationManager.Outcome.SKIPPED_LATE;
             }
+            plugin.recommendations().recordOutcome(uuid, current, playedMs, durMs, outcome);
         }
 
         Track next = plugin.queues().advance(uuid, current, false);
@@ -675,6 +688,11 @@ public final class MusicPlaybackManager {
         PlaybackSession session = sessions.get(uuid);
         if (session != null && session.getTrack().id().equals(track.id())) {
             session.setState(PlaybackState.COMPLETED);
+        }
+
+        if (plugin.recommendations() != null) {
+            long durMs = track.durationMs();
+            plugin.recommendations().recordOutcome(uuid, track, durMs, durMs, dev.vibesindev.vibesmusic.recommendation.RecommendationManager.Outcome.COMPLETED);
         }
 
         Track next =
@@ -1202,6 +1220,22 @@ public final class MusicPlaybackManager {
         }
 
         Track current = party.getCurrentTrack();
+        if (current != null && plugin.recommendations() != null) {
+            PlaybackSession curSession = sessions.get(party.getPartyId());
+            long playedMs = curSession != null ? curSession.getPositionMs() : 0L;
+            long durMs = current.durationMs();
+            dev.vibesindev.vibesmusic.recommendation.RecommendationManager.Outcome outcome;
+            if (durMs > 0 && playedMs >= 0.8 * durMs) {
+                outcome = dev.vibesindev.vibesmusic.recommendation.RecommendationManager.Outcome.COMPLETED;
+            } else if (playedMs < 30_000L || (durMs > 0 && playedMs < 0.1 * durMs)) {
+                outcome = dev.vibesindev.vibesmusic.recommendation.RecommendationManager.Outcome.SKIPPED_EARLY;
+            } else {
+                outcome = dev.vibesindev.vibesmusic.recommendation.RecommendationManager.Outcome.SKIPPED_LATE;
+            }
+            for (UUID member : party.getMembers()) {
+                plugin.recommendations().recordOutcome(member, current, playedMs, durMs, outcome);
+            }
+        }
         Track next = party.dequeue();
 
         if (next == null) {
@@ -1383,7 +1417,7 @@ public final class MusicPlaybackManager {
                                                     plugin.metrics().incrementTracksPlayed();
                                                     started.add(member);
                                                     if (plugin.recommendations() != null) {
-                                                        plugin.recommendations().recordPlay(member, track);
+                                                        plugin.recommendations().recordStart(member, track);
                                                     }
                                                 }
                                             }
@@ -1541,6 +1575,13 @@ public final class MusicPlaybackManager {
         PlaybackSession session = sessions.get(party.getPartyId());
         if (session != null && session.getTrack().id().equals(track.id())) {
             session.setState(PlaybackState.COMPLETED);
+        }
+
+        if (plugin.recommendations() != null) {
+            long durMs = track.durationMs();
+            for (UUID member : party.getMembers()) {
+                plugin.recommendations().recordOutcome(member, track, durMs, durMs, dev.vibesindev.vibesmusic.recommendation.RecommendationManager.Outcome.COMPLETED);
+            }
         }
 
         if (party.getRepeatMode() == MusicParty.RepeatMode.ONE) {
@@ -1769,7 +1810,7 @@ public final class MusicPlaybackManager {
 
                                             plugin.metrics().incrementTracksPlayed();
                                             if (plugin.recommendations() != null) {
-                                                plugin.recommendations().recordPlay(uuid, track);
+                                                plugin.recommendations().recordStart(uuid, track);
                                             }
 
                                             PlaybackSession currentSession = sessions.get(uuid);

@@ -169,11 +169,6 @@ public final class MusicQueueManager {
             playerHistory.pollFirst();
         }
 
-        // Update recommendation taste profile
-        if (plugin.recommendations() != null) {
-            plugin.recommendations().recordPlay(player, track);
-        }
-
         // Persist to the SQLite database asynchronously.
         final UUID playerCopy = player;
         final Track trackCopy = track;

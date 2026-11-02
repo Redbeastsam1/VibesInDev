@@ -7,6 +7,10 @@ public record Track(
         long durationSeconds,
         String sourceUrl
 ) {
+    public long durationMs() {
+        return durationSeconds * 1000L;
+    }
+
     public String durationText() {
         if (durationSeconds <= 0) {
             return "Unknown";

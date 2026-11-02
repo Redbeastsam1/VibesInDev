@@ -3,6 +3,7 @@ package dev.vibesindev.vibesmusic.recommendation;
 import dev.vibesindev.vibesmusic.model.Track;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.HashSet;
@@ -48,6 +49,12 @@ public final class PlayerTasteProfile {
 
     /** Disliked tracks under 7-day soft cooldown (trackId -> expireTimestamp). */
     private final Map<String, Long> dislikedTracks = new ConcurrentHashMap<>();
+
+    /** Custom track cooldowns for skipped tracks (trackId / compositionKey -> expiry timestamp). */
+    private final Map<String, Long> customTrackCooldowns = new ConcurrentHashMap<>();
+
+    /** Tracks timestamp of last early skip per artist to penalize only on 2nd+ skip in 24h. */
+    private final Map<String, Long> recentArtistEarlySkips = new ConcurrentHashMap<>();
 
     /** Per-profile dynamic lineage learned from Spotify related artists or user sessions. */
     private final Map<String, Set<String>> dynamicLineage = new ConcurrentHashMap<>();
@@ -169,95 +176,147 @@ public final class PlayerTasteProfile {
     // =========================================================
 
     /**
-     * Ingests a track play event from Minecraft.
+     * Records stream start: adds exactly one fatigue entry and updates recentArtists (window of 4).
+     * No affinity changes here (fixes F11).
      */
-    public synchronized void recordPlay(Track track) {
+    public synchronized void recordStart(Track track) {
         if (track == null) return;
-
         long now = System.currentTimeMillis();
-        String trackId = track.id();
-        String artist = track.artist().toLowerCase(Locale.ROOT).trim();
 
-        // 1. Fatigue tracking (with canonical title!)
-        fatigueHistory.addLast(new FatigueEntry(trackId, track.artist(), track.title(), now));
-        while (fatigueHistory.size() > 50) {
-            fatigueHistory.removeFirst();
-        }
-
-        // 2. Recent artist tracking (keep last 2)
-        recentArtists.addLast(artist);
-        while (recentArtists.size() > 2) {
-            recentArtists.removeFirst();
-        }
-
-        // 3. Artist affinity boost
-        boostArtist(artist, 0.5);
-    }
-
-    /**
-     * Ingests a track added to a custom playlist ($2.5\times$ explicit preference boost).
-     */
-    public synchronized void recordPlaylistAdd(Track track) {
-        if (track == null) return;
-        String artist = track.artist().toLowerCase(Locale.ROOT).trim();
-        boostArtist(artist, 1.25); // $2.5x of base play boost (0.5 * 2.5 = 1.25)
-    }
-
-    /**
-     * Ingests an explicit thumbs-up like (+0.5 artist affinity boost).
-     */
-    public synchronized void recordLike(Track track) {
-        if (track == null) return;
-        dislikedTracks.remove(track.id());
-        String artist = track.artist().toLowerCase(Locale.ROOT).trim();
-        boostArtist(artist, 2.5); // +0.5 effective affinity boost
-    }
-
-    /**
-     * Ingests an explicit thumbs-down dislike: applies a 7-day soft ban and downweights artist by 50%.
-     */
-    public synchronized void recordDislike(Track track) {
-        if (track == null) return;
-        long sevenDays = 7L * 24 * 60 * 60 * 1000L;
-        dislikedTracks.put(track.id(), System.currentTimeMillis() + sevenDays);
-        fatigueHistory.addLast(new FatigueEntry(track.id(), track.artist(), track.title(), System.currentTimeMillis()));
-        while (fatigueHistory.size() > 50) {
-            fatigueHistory.removeFirst();
-        }
-        String artist = track.artist().toLowerCase(Locale.ROOT).trim();
-        downweightArtist(artist, 0.50);
-    }
-
-    /**
-     * Ingests an early skip (< 30s): downweights artist affinity by 20%.
-     */
-    public synchronized void recordSkip(Track track) {
-        if (track == null) return;
-        // SKIPPED TRACKS MUST ENTER FATIGUE COOLDOWN SO THEY ARE NOT RECOMMENDED AGAIN
-        long now = System.currentTimeMillis();
+        // 1. Fatigue tracking: exactly one entry per played track
         fatigueHistory.addLast(new FatigueEntry(track.id(), track.artist(), track.title(), now));
         while (fatigueHistory.size() > 50) {
             fatigueHistory.removeFirst();
         }
-        String artist = track.artist().toLowerCase(Locale.ROOT).trim();
-        downweightArtist(artist, 0.20);
+
+        // 2. Recent artists tracking (window is 4)
+        String artist = ArtistNames.normalize(track.artist());
+        if (!artist.isEmpty() && !artist.equalsIgnoreCase("unknown")) {
+            recentArtists.addLast(artist);
+            while (recentArtists.size() > 4) {
+                recentArtists.removeFirst();
+            }
+        }
     }
 
-    private void boostArtist(String artist, double boost) {
+    @Deprecated
+    public synchronized void recordPlay(Track track) {
+        recordStart(track);
+    }
+
+    /**
+     * Records playback outcome and updates artist affinities with graded signals and diminishing returns.
+     */
+    public synchronized void recordOutcome(
+            Track track,
+            long playedMs,
+            long durationMs,
+            RecommendationManager.Outcome outcome,
+            org.bukkit.configuration.ConfigurationSection config
+    ) {
+        if (track == null) return;
+        double completionGain = config != null ? config.getDouble("recommendations.signals.completion-gain", 0.08) : 0.08;
+        double artistSkipPenalty = config != null ? config.getDouble("recommendations.signals.artist-skip-penalty", 0.10) : 0.10;
+
+        // Neutral non-listening outcomes
+        if (outcome == RecommendationManager.Outcome.AFK_OR_UNKNOWN
+                || outcome == RecommendationManager.Outcome.DISCONNECTED
+                || outcome == RecommendationManager.Outcome.MANUAL_STOP) {
+            return;
+        }
+
+        // Repeat / Requeue: double completion boost
+        if (outcome == RecommendationManager.Outcome.REPEATED || outcome == RecommendationManager.Outcome.REQUEUED) {
+            boostArtistDiminishing(ArtistNames.normalize(track.artist()), 2.0 * completionGain);
+            return;
+        }
+
+        double ratio = (durationMs > 0) ? (double) playedMs / durationMs : 0.0;
+        long now = System.currentTimeMillis();
+
+        if (outcome == RecommendationManager.Outcome.COMPLETED || ratio >= 0.80) {
+            // Completion >= 80%: positive gain with diminishing returns
+            boostArtistDiminishing(ArtistNames.normalize(track.artist()), completionGain);
+        } else if (ratio >= 0.50) {
+            // 50-80%: neutral
+        } else if (ratio >= 0.10 && ratio < 0.50) {
+            // 10-50% played then skipped: mild negative, 6h track cooldown, no artist change
+            if (track.id() != null) customTrackCooldowns.put(track.id(), now + 6 * 3600_000L);
+            String compKey = RecordingIdentity.compositionTitleKey(track.title(), track.artist());
+            if (!compKey.isEmpty()) customTrackCooldowns.put(compKey, now + 6 * 3600_000L);
+        } else {
+            // < 10% or < 30s: strong negative on track (24h cooldown)
+            if (track.id() != null) customTrackCooldowns.put(track.id(), now + 24 * 3600_000L);
+            String compKey = RecordingIdentity.compositionTitleKey(track.title(), track.artist());
+            if (!compKey.isEmpty()) customTrackCooldowns.put(compKey, now + 24 * 3600_000L);
+
+            // Artist penalized only if 2nd+ early skip in 24h
+            String normArtist = ArtistNames.normalize(track.artist());
+            if (!normArtist.isEmpty()) {
+                Long lastSkip = recentArtistEarlySkips.get(normArtist);
+                if (lastSkip != null && (now - lastSkip) < 24 * 3600_000L) {
+                    downweightArtist(normArtist, artistSkipPenalty);
+                }
+                recentArtistEarlySkips.put(normArtist, now);
+            }
+        }
+    }
+
+    @Deprecated
+    public synchronized void recordSkip(Track track) {
+        recordOutcome(track, 0, 0, RecommendationManager.Outcome.SKIPPED_EARLY, null);
+    }
+
+    /**
+     * Ingests a track added to a custom playlist (playlistAddGain with diminishing returns).
+     */
+    public synchronized void recordPlaylistAdd(Track track) {
+        if (track == null) return;
+        String artist = ArtistNames.normalize(track.artist());
+        boostArtistDiminishing(artist, 0.20);
+    }
+
+    /**
+     * Ingests an explicit thumbs-up like (likeGain with diminishing returns, clears dislike).
+     */
+    public synchronized void recordLike(Track track) {
+        if (track == null) return;
+        if (track.id() != null) {
+            dislikedTracks.remove(track.id());
+            customTrackCooldowns.remove(track.id());
+        }
+        String artist = ArtistNames.normalize(track.artist());
+        boostArtistDiminishing(artist, 0.25);
+    }
+
+    /**
+     * Ingests an explicit thumbs-down dislike: applies a 7-day soft ban and downweights artist by 15%.
+     */
+    public synchronized void recordDislike(Track track) {
+        if (track == null) return;
+        long sevenDays = 7L * 24 * 60 * 60 * 1000L;
+        if (track.id() != null) dislikedTracks.put(track.id(), System.currentTimeMillis() + sevenDays);
+        String compKey = RecordingIdentity.compositionTitleKey(track.title(), track.artist());
+        if (!compKey.isEmpty()) customTrackCooldowns.put(compKey, System.currentTimeMillis() + sevenDays);
+
+        String artist = ArtistNames.normalize(track.artist());
+        downweightArtist(artist, 0.15);
+    }
+
+    private void boostArtistDiminishing(String artist, double gain) {
         if (artist == null || artist.isBlank() || artist.equalsIgnoreCase("unknown")) return;
         artistAffinities.compute(artist, (k, oldVal) -> {
-            if (oldVal == null) {
-                return Double.valueOf(Math.min(1.0, Math.max(0.0, boost * 0.2)));
-            }
-            return Double.valueOf(Math.min(1.0, Math.max(0.0, oldVal.doubleValue() + boost * 0.2)));
+            double current = (oldVal != null) ? oldVal.doubleValue() : 0.20;
+            double updated = current + gain * (1.0 - current);
+            return Math.min(1.0, Math.max(0.01, updated));
         });
     }
 
     private void downweightArtist(String artist, double factor) {
         if (artist == null || artist.isBlank() || artist.equalsIgnoreCase("unknown")) return;
         artistAffinities.computeIfPresent(artist, (k, oldVal) -> {
-            double ov = (oldVal != null) ? oldVal.doubleValue() : 0.0;
-            return Double.valueOf(Math.max(0.01, ov * (1.0 - factor)));
+            double ov = oldVal.doubleValue();
+            return Math.max(0.01, ov * (1.0 - factor));
         });
     }
 
@@ -496,6 +555,31 @@ public final class PlayerTasteProfile {
             }
         }
 
+        // Check custom track cooldowns (24h early skip, 6h late skip)
+        if (trackId != null) {
+            Long customExpiry = customTrackCooldowns.get(trackId);
+            if (customExpiry != null) {
+                if (System.currentTimeMillis() < customExpiry) {
+                    return true;
+                } else {
+                    customTrackCooldowns.remove(trackId);
+                }
+            }
+        }
+        if (title != null) {
+            String compKey = RecordingIdentity.compositionTitleKey(title, artist);
+            if (!compKey.isEmpty()) {
+                Long compExpiry = customTrackCooldowns.get(compKey);
+                if (compExpiry != null) {
+                    if (System.currentTimeMillis() < compExpiry) {
+                        return true;
+                    } else {
+                        customTrackCooldowns.remove(compKey);
+                    }
+                }
+            }
+        }
+
         String canTitle = RecordingIdentity.compositionTitleKey(title, artist);
         long cutoff = System.currentTimeMillis() - cooldownMs;
 
@@ -695,6 +779,10 @@ public final class PlayerTasteProfile {
         if (lastSync > 0) {
             this.lastSyncTimestamp = lastSync;
         }
+    }
+
+    public synchronized List<FatigueEntry> getFatigueHistory() {
+        return new ArrayList<>(this.fatigueHistory);
     }
 
     public synchronized void restoreFatigue(List<FatigueEntry> recentFatigue) {

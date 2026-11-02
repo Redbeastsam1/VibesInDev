@@ -88,46 +88,73 @@ public final class RecommendationManager {
     /**
      * Records a track played by a player to update their taste profile and fatigue history.
      */
-    public void recordPlay(UUID playerUuid, Track track) {
-        if (playerUuid == null || track == null) return;
-        getOrCreateProfile(playerUuid).recordPlay(track);
-        saveProfile(playerUuid);
+    public enum Outcome {
+        COMPLETED,
+        SKIPPED_EARLY,
+        SKIPPED_LATE,
+        REPEATED,
+        REQUEUED,
+        AFK_OR_UNKNOWN,
+        DISCONNECTED,
+        MANUAL_STOP
     }
 
-    /**
-     * Records a track added to a playlist by a player.
-     */
+    private final Map<UUID, String> activeImpressionIds = new ConcurrentHashMap<>();
+
+    public void setActiveImpression(UUID playerUuid, String impressionId) {
+        if (playerUuid != null && impressionId != null) {
+            activeImpressionIds.put(playerUuid, impressionId);
+        }
+    }
+
+    public String getActiveImpression(UUID playerUuid) {
+        return playerUuid != null ? activeImpressionIds.get(playerUuid) : null;
+    }
+
+    public void recordStart(UUID playerUuid, Track track) {
+        if (playerUuid == null || track == null) return;
+        getOrCreateProfile(playerUuid).recordStart(track);
+    }
+
+    public void recordOutcome(UUID playerUuid, Track track, long playedMs, long durationMs, Outcome outcome) {
+        if (playerUuid == null || track == null) return;
+        getOrCreateProfile(playerUuid).recordOutcome(track, playedMs, durationMs, outcome,
+                plugin != null ? plugin.getConfig() : null);
+        saveProfile(playerUuid);
+
+        String imprId = activeImpressionIds.get(playerUuid);
+        if (imprId != null && plugin != null && plugin.cache() != null) {
+            double ratio = (durationMs > 0) ? Math.min(1.0, (double) playedMs / durationMs) : (outcome == Outcome.COMPLETED ? 1.0 : 0.0);
+            plugin.cache().updateRecImpressionOutcome(imprId, ratio, outcome != null ? outcome.name() : "UNKNOWN");
+        }
+    }
+
+    @Deprecated
+    public void recordPlay(UUID playerUuid, Track track) {
+        recordStart(playerUuid, track);
+    }
+
     public void recordPlaylistAdd(UUID playerUuid, Track track) {
         if (playerUuid == null || track == null) return;
         getOrCreateProfile(playerUuid).recordPlaylistAdd(track);
         saveProfile(playerUuid);
     }
 
-    /**
-     * Records an explicit thumbs-up like by a player (+0.5 artist affinity boost).
-     */
     public void recordLike(UUID playerUuid, Track track) {
         if (playerUuid == null || track == null) return;
         getOrCreateProfile(playerUuid).recordLike(track);
         saveProfile(playerUuid);
     }
 
-    /**
-     * Records an explicit thumbs-down dislike by a player (7-day soft cooldown).
-     */
     public void recordDislike(UUID playerUuid, Track track) {
         if (playerUuid == null || track == null) return;
         getOrCreateProfile(playerUuid).recordDislike(track);
         saveProfile(playerUuid);
     }
 
-    /**
-     * Records an early skip (< 30s) by a player to downweight artist affinity.
-     */
+    @Deprecated
     public void recordSkip(UUID playerUuid, Track track) {
-        if (playerUuid == null || track == null) return;
-        getOrCreateProfile(playerUuid).recordSkip(track);
-        saveProfile(playerUuid);
+        recordOutcome(playerUuid, track, 0, 0, Outcome.SKIPPED_EARLY);
     }
 
     // =========================================================

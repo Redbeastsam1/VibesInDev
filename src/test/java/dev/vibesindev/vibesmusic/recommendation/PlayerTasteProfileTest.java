@@ -138,21 +138,25 @@ public class PlayerTasteProfileTest {
 
 
 
-        // Play 2 more tracks by other artists
+        // Play 4 more tracks by other artists to evict Daft Punk from the 4-track window
 
         profile.recordPlay(new Track("t3", "Song 3", "Deadmau5", 180, "url3"));
 
         profile.recordPlay(new Track("t4", "Song 4", "Skrillex", 180, "url4"));
 
+        profile.recordPlay(new Track("t5", "Song 5", "Kavinsky", 180, "url5"));
+
+        profile.recordPlay(new Track("t6", "Song 6", "Gesaffelstein", 180, "url6"));
 
 
-        // Daft Punk is no longer in the last 2
+
+        // Daft Punk is no longer in the last 4
 
         assertFalse(profile.isRecentArtist("Daft Punk"));
 
-        // Skrillex is now in the last 2
+        // Gesaffelstein is now in the last 4
 
-        assertTrue(profile.isRecentArtist("Skrillex"));
+        assertTrue(profile.isRecentArtist("Gesaffelstein"));
 
     }
 
@@ -172,7 +176,7 @@ public class PlayerTasteProfileTest {
 
         double likedAffinity = profile.getArtistAffinity("Avicii");
 
-        assertTrue(likedAffinity >= 0.5, "Liked artist should have affinity >= 0.5");
+        assertTrue(likedAffinity >= 0.25, "Liked artist should have affinity >= 0.25");
 
         assertFalse(profile.isDisliked(t.id()), "Track should not be marked disliked");
 
@@ -210,17 +214,22 @@ public class PlayerTasteProfileTest {
 
         Track t = new Track("track_skip", "Skipped Song", "Calvin Harris", 210, "url_skip");
 
-        profile.recordPlay(t);
+        profile.ingestSpotifyArtists(List.of("Calvin Harris"), null);
 
         double initial = profile.getArtistAffinity("Calvin Harris");
 
 
 
+        // 1st early skip: artist affinity is unchanged (only track cooldown)
         profile.recordSkip(t);
+        assertEquals(initial, profile.getArtistAffinity("Calvin Harris"), 0.001);
 
+        // 2nd early skip within 24h: artist is downweighted
+        Track t2 = new Track("track_skip2", "Skipped Song 2", "Calvin Harris", 210, "url_skip2");
+        profile.recordPlay(t2);
+        profile.recordSkip(t2);
         double afterSkip = profile.getArtistAffinity("Calvin Harris");
-
-        assertTrue(afterSkip < initial, "Skipping track must downweight artist affinity");
+        assertTrue(afterSkip < initial, "Second skip of artist within 24h must downweight artist affinity");
 
     }
 

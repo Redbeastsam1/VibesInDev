@@ -22,6 +22,7 @@ import java.util.UUID;
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 
@@ -208,6 +209,17 @@ public final class TrackCache {
                     "PRIMARY KEY (player_uuid, track_id, source)" +
                     ")");
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_pst_player_uuid ON player_spotify_tracks(player_uuid);");
+            stmt.execute("CREATE TABLE IF NOT EXISTS artist_relations (" +
+                    "a_norm TEXT NOT NULL, " +
+                    "b_norm TEXT NOT NULL, " +
+                    "kind TEXT NOT NULL, " +
+                    "weight REAL NOT NULL, " +
+                    "source TEXT NOT NULL, " +
+                    "fetched_at INTEGER NOT NULL, " +
+                    "PRIMARY KEY (a_norm, b_norm)" +
+                    ")");
+            stmt.execute("CREATE INDEX IF NOT EXISTS idx_artist_relations_a ON artist_relations(a_norm);");
+            stmt.execute("CREATE INDEX IF NOT EXISTS idx_artist_relations_b ON artist_relations(b_norm);");
 
             // Schema migrations for pre-existing tables
             try {
@@ -1043,6 +1055,95 @@ public final class TrackCache {
         } catch (SQLException e) {
             plugin.getLogger().warning("[VibesInDev] Error saving artist_genres: " + e.getMessage());
         }
+    }
+
+    // =======================================================
+    // ARTIST RELATIONS / DATA-DRIVEN LINEAGE (Phase 4.1)
+    // =======================================================
+
+    public record ArtistRelation(
+            String aNorm,
+            String bNorm,
+            String kind,
+            double weight,
+            String source,
+            long fetchedAt
+    ) {}
+
+    public void saveArtistRelation(String aNorm, String bNorm, String kind, double weight, String source) {
+        if (aNorm == null || bNorm == null || aNorm.isBlank() || bNorm.isBlank()) return;
+        String sql = "INSERT INTO artist_relations (a_norm, b_norm, kind, weight, source, fetched_at) VALUES (?, ?, ?, ?, ?, ?) " +
+                     "ON CONFLICT(a_norm, b_norm) DO UPDATE SET kind = excluded.kind, weight = excluded.weight, source = excluded.source, fetched_at = excluded.fetched_at";
+        long now = System.currentTimeMillis();
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, aNorm.toLowerCase(Locale.ROOT).trim());
+            ps.setString(2, bNorm.toLowerCase(Locale.ROOT).trim());
+            ps.setString(3, kind != null ? kind : "similar");
+            ps.setDouble(4, Math.max(0.0, Math.min(1.0, weight)));
+            ps.setString(5, source != null ? source : "UNKNOWN");
+            ps.setLong(6, now);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            plugin.getLogger().warning("[VibesInDev] Error saving artist_relation: " + e.getMessage());
+        }
+    }
+
+    public void saveArtistRelations(List<ArtistRelation> relations) {
+        if (relations == null || relations.isEmpty()) return;
+        String sql = "INSERT INTO artist_relations (a_norm, b_norm, kind, weight, source, fetched_at) VALUES (?, ?, ?, ?, ?, ?) " +
+                     "ON CONFLICT(a_norm, b_norm) DO UPDATE SET kind = excluded.kind, weight = excluded.weight, source = excluded.source, fetched_at = excluded.fetched_at";
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            for (ArtistRelation rel : relations) {
+                if (rel == null || rel.aNorm() == null || rel.bNorm() == null) continue;
+                ps.setString(1, rel.aNorm().toLowerCase(Locale.ROOT).trim());
+                ps.setString(2, rel.bNorm().toLowerCase(Locale.ROOT).trim());
+                ps.setString(3, rel.kind() != null ? rel.kind() : "similar");
+                ps.setDouble(4, Math.max(0.0, Math.min(1.0, rel.weight())));
+                ps.setString(5, rel.source() != null ? rel.source() : "UNKNOWN");
+                ps.setLong(6, rel.fetchedAt() > 0 ? rel.fetchedAt() : System.currentTimeMillis());
+                ps.addBatch();
+            }
+            ps.executeBatch();
+        } catch (SQLException e) {
+            plugin.getLogger().warning("[VibesInDev] Error batch saving artist_relations: " + e.getMessage());
+        }
+    }
+
+    public Map<String, Double> getArtistRelations(String artistNorm) {
+        if (artistNorm == null || artistNorm.isBlank()) return Collections.emptyMap();
+        String sql = "SELECT b_norm, weight FROM artist_relations WHERE a_norm = ?";
+        Map<String, Double> map = new HashMap<>();
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, artistNorm.toLowerCase(Locale.ROOT).trim());
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    map.put(rs.getString("b_norm"), rs.getDouble("weight"));
+                }
+            }
+        } catch (SQLException e) {
+            plugin.getLogger().warning("[VibesInDev] Error reading artist_relations: " + e.getMessage());
+        }
+        return map;
+    }
+
+    public List<ArtistRelation> getAllArtistRelations() {
+        String sql = "SELECT a_norm, b_norm, kind, weight, source, fetched_at FROM artist_relations";
+        List<ArtistRelation> list = new ArrayList<>();
+        try (Connection conn = getConnection(); Statement stmt = conn.createStatement(); ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                list.add(new ArtistRelation(
+                        rs.getString("a_norm"),
+                        rs.getString("b_norm"),
+                        rs.getString("kind"),
+                        rs.getDouble("weight"),
+                        rs.getString("source"),
+                        rs.getLong("fetched_at")
+                ));
+            }
+        } catch (SQLException e) {
+            plugin.getLogger().warning("[VibesInDev] Error reading all artist_relations: " + e.getMessage());
+        }
+        return list;
     }
 
     // =======================================================

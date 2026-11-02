@@ -89,6 +89,16 @@ public final class PlayerTasteProfile {
 
     /** Per-profile dynamic lineage learned from Spotify related artists or user sessions. */
     private final Map<String, Set<String>> dynamicLineage = new ConcurrentHashMap<>();
+    private final Map<String, Map<String, Double>> dynamicLineageWeights = new ConcurrentHashMap<>();
+
+    private static final java.util.concurrent.atomic.AtomicInteger GLOBAL_LINEAGE_VERSION = new java.util.concurrent.atomic.AtomicInteger(0);
+    private int observedGlobalLineageVersion = 0;
+
+    /**
+     * Shared dynamic artist relationships loaded from the database or external enrichers.
+     * Normalized artist A -> (Normalized artist B -> strength weight 0.0-1.0)
+     */
+    private static final Map<String, Map<String, Double>> GLOBAL_DYNAMIC_LINEAGE = new ConcurrentHashMap<>();
 
     /**
      * Built-in knowledge graph mapping bands to solo members, spin-offs, and closely associated artists.
@@ -640,42 +650,106 @@ public final class PlayerTasteProfile {
         }
     }
 
-        /**
-     * Registers a dynamic bidirectional connection between two artists (e.g. from Spotify Related Artists).
+    /**
+     * Registers a dynamic bidirectional connection between two artists (default strength 1.0).
      */
     public void registerLineage(String artistA, String artistB) {
-        if (artistA == null || artistB == null || artistA.isBlank() || artistB.isBlank()) return;
-        String aNorm = artistA.toLowerCase(Locale.ROOT).trim();
-        String bNorm = artistB.toLowerCase(Locale.ROOT).trim();
-        if (aNorm.equals(bNorm)) return;
+        registerLineage(artistA, artistB, 1.0);
+    }
 
+    /**
+     * Registers a dynamic bidirectional connection between two artists with an explicit relation strength (0.0 to 1.0).
+     */
+    public void registerLineage(String artistA, String artistB, double strength) {
+        if (artistA == null || artistB == null || artistA.isBlank() || artistB.isBlank()) return;
+        String aNorm = ArtistNames.normalize(artistA);
+        String bNorm = ArtistNames.normalize(artistB);
+        if (aNorm.isEmpty() || bNorm.isEmpty() || aNorm.equals(bNorm)) return;
+
+        double s = Math.max(0.0, Math.min(1.0, strength));
         dynamicLineage.computeIfAbsent(aNorm, k -> ConcurrentHashMap.newKeySet()).add(bNorm);
         dynamicLineage.computeIfAbsent(bNorm, k -> ConcurrentHashMap.newKeySet()).add(aNorm);
+        dynamicLineageWeights.computeIfAbsent(aNorm, k -> new ConcurrentHashMap<>()).put(bNorm, s);
+        dynamicLineageWeights.computeIfAbsent(bNorm, k -> new ConcurrentHashMap<>()).put(aNorm, s);
         invalidateAffinityCache();
+    }
+
+    /**
+     * Loads dynamic artist relations from the database into the shared knowledge graph.
+     */
+    public static void loadGlobalLineage(List<dev.vibesindev.vibesmusic.cache.TrackCache.ArtistRelation> relations) {
+        if (relations == null) return;
+        for (dev.vibesindev.vibesmusic.cache.TrackCache.ArtistRelation rel : relations) {
+            if (rel == null || rel.aNorm() == null || rel.bNorm() == null) continue;
+            String a = ArtistNames.normalize(rel.aNorm());
+            String b = ArtistNames.normalize(rel.bNorm());
+            if (a.isEmpty() || b.isEmpty() || a.equals(b)) continue;
+            double w = Math.max(0.0, Math.min(1.0, rel.weight()));
+            GLOBAL_DYNAMIC_LINEAGE.computeIfAbsent(a, k -> new ConcurrentHashMap<>()).put(b, w);
+            GLOBAL_DYNAMIC_LINEAGE.computeIfAbsent(b, k -> new ConcurrentHashMap<>()).put(a, w);
+        }
+        GLOBAL_LINEAGE_VERSION.incrementAndGet();
+    }
+
+    public static void clearGlobalLineage() {
+        GLOBAL_DYNAMIC_LINEAGE.clear();
+        GLOBAL_LINEAGE_VERSION.incrementAndGet();
+    }
+
+    /**
+     * Retrieves all associated band members, spin-offs, and related artists with their connection strength.
+     */
+    public Map<String, Double> getConnectedArtistsWithStrengths(String artist) {
+        if (artist == null || artist.isBlank()) return Collections.emptyMap();
+        String norm = ArtistNames.normalize(artist);
+        if (norm.isEmpty()) return Collections.emptyMap();
+
+        Map<String, Double> result = new HashMap<>();
+
+        // 1. Static lineage graph (default strength 1.0)
+        Set<String> staticMatches = STATIC_LINEAGE_GRAPH.get(norm);
+        if (staticMatches != null) {
+            for (String s : staticMatches) {
+                result.put(s, 1.0);
+            }
+        }
+
+        // 2. Global dynamic lineage from database
+        Map<String, Double> globalMatches = GLOBAL_DYNAMIC_LINEAGE.get(norm);
+        if (globalMatches != null) {
+            for (Map.Entry<String, Double> entry : globalMatches.entrySet()) {
+                result.merge(entry.getKey(), entry.getValue(), Math::max);
+            }
+        }
+
+        // 3. Profile-specific dynamic lineage
+        Set<String> dynamicMatches = dynamicLineage.get(norm);
+        if (dynamicMatches != null) {
+            Map<String, Double> weights = dynamicLineageWeights.get(norm);
+            for (String d : dynamicMatches) {
+                double w = (weights != null && weights.containsKey(d)) ? weights.get(d) : 1.0;
+                result.merge(d, w, Math::max);
+            }
+        }
+
+        // 4. Source profiles for blends
+        if (sourceProfiles != null && !sourceProfiles.isEmpty()) {
+            for (PlayerTasteProfile sp : sourceProfiles) {
+                Map<String, Double> spConnected = sp.getConnectedArtistsWithStrengths(artist);
+                for (Map.Entry<String, Double> entry : spConnected.entrySet()) {
+                    result.merge(entry.getKey(), entry.getValue(), Math::max);
+                }
+            }
+        }
+
+        return result;
     }
 
     /**
      * Retrieves all associated band members, spin-offs, and related artists for a given artist.
      */
     public Set<String> getConnectedArtists(String artist) {
-        if (artist == null || artist.isBlank()) return Collections.emptySet();
-        String norm = ArtistNames.normalize(artist);
-
-        Set<String> result = new HashSet<>();
-        Set<String> staticMatches = STATIC_LINEAGE_GRAPH.get(norm);
-        if (staticMatches != null) {
-            result.addAll(staticMatches);
-        }
-        Set<String> dynamicMatches = dynamicLineage.get(norm);
-        if (dynamicMatches != null) {
-            result.addAll(dynamicMatches);
-        }
-        if (sourceProfiles != null && !sourceProfiles.isEmpty()) {
-            for (PlayerTasteProfile sp : sourceProfiles) {
-                result.addAll(sp.getConnectedArtists(artist));
-            }
-        }
-        return result;
+        return Collections.unmodifiableSet(getConnectedArtistsWithStrengths(artist).keySet());
     }
 
     /**
@@ -690,6 +764,11 @@ public final class PlayerTasteProfile {
         if (artist == null || artist.isBlank()) return 0.0;
         String key = artist.toLowerCase(Locale.ROOT).trim();
         String normKey = ArtistNames.normalize(key);
+
+        if (observedGlobalLineageVersion != GLOBAL_LINEAGE_VERSION.get()) {
+            affinityLookupCache.clear();
+            observedGlobalLineageVersion = GLOBAL_LINEAGE_VERSION.get();
+        }
 
         Double cached = affinityLookupCache.get(normKey);
         if (cached != null) return cached;
@@ -760,13 +839,16 @@ public final class PlayerTasteProfile {
 
         // 3. Lineage / Band Member / Related Artist match
         double highestLineage = 0.0;
-        Set<String> connected = getConnectedArtists(key);
+        Map<String, Double> connected = getConnectedArtistsWithStrengths(key);
         if (!connected.isEmpty()) {
-            for (String rel : connected) {
+            for (Map.Entry<String, Double> entry : connected.entrySet()) {
+                String rel = entry.getKey();
+                double strength = entry.getValue() != null ? entry.getValue() : 1.0;
                 Double relAffinity = artistAffinities.get(rel);
                 if (relAffinity != null && relAffinity.doubleValue() > 0.0) {
                     double decayedLineageAff = computeDecayedAffinity(rel, relAffinity.doubleValue());
-                    double lineageScore = decayedLineageAff * 0.75;
+                    double factor = 0.5 + 0.25 * strength;
+                    double lineageScore = decayedLineageAff * factor;
                     if (lineageScore > highestLineage) {
                         highestLineage = lineageScore;
                     }
@@ -1090,6 +1172,12 @@ public final class PlayerTasteProfile {
         for (PlayerTasteProfile p : profiles) {
             for (Map.Entry<String, Set<String>> entry : p.dynamicLineage.entrySet()) {
                 blend.dynamicLineage.computeIfAbsent(entry.getKey(), k -> ConcurrentHashMap.newKeySet()).addAll(entry.getValue());
+            }
+            for (Map.Entry<String, Map<String, Double>> entry : p.dynamicLineageWeights.entrySet()) {
+                for (Map.Entry<String, Double> wEntry : entry.getValue().entrySet()) {
+                    blend.dynamicLineageWeights.computeIfAbsent(entry.getKey(), k -> new ConcurrentHashMap<>())
+                            .merge(wEntry.getKey(), wEntry.getValue(), Math::max);
+                }
             }
         }
 

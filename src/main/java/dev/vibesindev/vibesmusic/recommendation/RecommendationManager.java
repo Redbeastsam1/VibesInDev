@@ -24,6 +24,7 @@ public final class RecommendationManager implements org.bukkit.event.Listener {
 
     private final VibesInDevPlugin plugin;
     private final GenreResolver genreResolver;
+    private final ArtistLineageEnricher enricher;
     private RecommendationEngine engine;
 
     /** Per-player taste profile models. */
@@ -42,6 +43,7 @@ public final class RecommendationManager implements org.bukkit.event.Listener {
     public RecommendationManager(VibesInDevPlugin plugin, RecommendationEngine engine) {
         this.plugin = plugin;
         this.genreResolver = new GenreResolver(plugin);
+        this.enricher = new ArtistLineageEnricher(plugin);
         this.engine = (engine != null) ? engine : new RecommendationEngine(plugin, this.genreResolver);
         loadConfiguredLineages();
     }
@@ -52,6 +54,10 @@ public final class RecommendationManager implements org.bukkit.event.Listener {
 
     public GenreResolver genreResolver() {
         return genreResolver;
+    }
+
+    public ArtistLineageEnricher enricher() {
+        return enricher;
     }
 
     public RecommendationEngine engine() {
@@ -458,13 +464,19 @@ public final class RecommendationManager implements org.bukkit.event.Listener {
     }
 
     private void loadConfiguredLineages() {
-        org.bukkit.configuration.ConfigurationSection sec = plugin.getConfig().getConfigurationSection("recommendations.lineage");
+        org.bukkit.configuration.ConfigurationSection sec = plugin != null ? plugin.getConfig().getConfigurationSection("recommendations.lineage") : null;
         if (sec != null) {
             for (String hub : sec.getKeys(false)) {
                 List<String> members = sec.getStringList(hub);
                 for (String m : members) {
                     PlayerTasteProfile.registerGlobalLineage(hub, m);
                 }
+            }
+        }
+        if (plugin != null && plugin.cache() != null) {
+            List<dev.vibesindev.vibesmusic.cache.TrackCache.ArtistRelation> dbRelations = plugin.cache().getAllArtistRelations();
+            if (dbRelations != null && !dbRelations.isEmpty()) {
+                PlayerTasteProfile.loadGlobalLineage(dbRelations);
             }
         }
     }

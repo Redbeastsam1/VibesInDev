@@ -83,3 +83,18 @@ recommendations:
   cache-bonus: 0.05
   # Start preloading when this percent of track remains
   preload-threshold-pct: 15
+  # Monopoly penalty vs continuity over the last N plays
+  monopoly:
+    window: 4
+    multipliers:
+      - 1.00 # 0 plays
+      - 0.80 # 1 play
+      - 0.40 # 2 plays
+      - 0.15 # 3+ plays
+  # Feedback signal gains with diminishing returns
+  signals:
+    completion-gain: 0.08
+    playlist-add-gain: 0.20
+    like-gain: 0.25
+    artist-skip-penalty: 0.10
+    dislike-artist-factor: 0.15

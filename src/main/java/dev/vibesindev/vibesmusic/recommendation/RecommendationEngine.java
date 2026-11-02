@@ -292,7 +292,7 @@ public final class RecommendationEngine {
             // 4. Vibe continuity (keeps playback in a consistent Daily Mix cluster)
             double continuity = 0.5;
             if (seed != null) {
-                if (seed.artist().equalsIgnoreCase(t.artist())) {
+                if (ArtistNames.sameArtist(seed.artist(), t.artist())) {
                     continuity = 0.85;
                 } else if (c.source() == RecommendationCandidate.Source.YOUTUBE_RADIO) {
                     continuity = 0.75; // YouTube RD algorithm already clustered it with seed
@@ -311,9 +311,11 @@ public final class RecommendationEngine {
                     + (0.20 * continuity)
                     + (0.15 * discovery);
 
-            // 8. Artist soft decay: if artist was played in last 2 songs, drop by 70% to ensure variety
-            if (profile != null && profile.isRecentArtist(t.artist())) {
-                score *= 0.30;
+            // 8. Monopoly vs continuity: graded multiplier over occurrences in last 4 plays
+            if (profile != null) {
+                int occurrences = profile.getRecentArtistCount(t.artist());
+                double monopolyMultiplier = getMonopolyMultiplier(occurrences);
+                score *= monopolyMultiplier;
             }
 
             // 9. Cache bonus (already downloaded OGG saves download time)
@@ -347,5 +349,22 @@ public final class RecommendationEngine {
             return m.group(1);
         }
         return null;
+    }
+
+    public double getMonopolyMultiplier(int occurrences) {
+        if (occurrences <= 0) return 1.00;
+        java.util.List<Double> configured = (plugin != null && plugin.getConfig() != null)
+                ? plugin.getConfig().getDoubleList("recommendations.monopoly.multipliers")
+                : null;
+        if (configured != null && !configured.isEmpty()) {
+            if (occurrences >= configured.size()) {
+                return configured.get(configured.size() - 1);
+            }
+            return configured.get(occurrences);
+        }
+        // Defaults: 0 -> 1.00, 1 -> 0.80, 2 -> 0.40, >= 3 -> 0.15
+        if (occurrences == 1) return 0.80;
+        if (occurrences == 2) return 0.40;
+        return 0.15;
     }
 }

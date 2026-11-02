@@ -616,16 +616,25 @@ public final class PlayerTasteProfile {
     }
 
     /**
-     * Returns true if the artist was played in the last 2 tracks.
+     * Returns the number of occurrences of this artist in the recent plays window (window of 4).
      */
-    public synchronized boolean isRecentArtist(String artist) {
-        if (artist == null || artist.isBlank()) return false;
+    public synchronized int getRecentArtistCount(String artist) {
+        if (artist == null || artist.isBlank()) return 0;
+        int count = 0;
         for (String recent : recentArtists) {
             if (ArtistNames.sameArtist(artist, recent)) {
-                return true;
+                count++;
             }
         }
-        return false;
+        return count;
+    }
+
+    /**
+     * @deprecated Use {@link #getRecentArtistCount(String)} instead.
+     */
+    @Deprecated
+    public synchronized boolean isRecentArtist(String artist) {
+        return getRecentArtistCount(artist) > 0;
     }
 
     public synchronized boolean isDisliked(String trackId) {
@@ -793,9 +802,12 @@ public final class PlayerTasteProfile {
             if (fe != null) {
                 this.fatigueHistory.add(fe);
                 if (fe.artist() != null && !fe.artist().isBlank()) {
-                    this.recentArtists.add(fe.artist().toLowerCase(Locale.ROOT).trim());
-                    while (this.recentArtists.size() > 2) {
-                        this.recentArtists.removeFirst();
+                    String norm = ArtistNames.normalize(fe.artist());
+                    if (!norm.isEmpty() && !norm.equalsIgnoreCase("unknown")) {
+                        this.recentArtists.add(norm);
+                        while (this.recentArtists.size() > 4) {
+                            this.recentArtists.removeFirst();
+                        }
                     }
                 }
             }

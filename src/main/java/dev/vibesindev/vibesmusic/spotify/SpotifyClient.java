@@ -2338,12 +2338,21 @@ public final class SpotifyClient {
                     PlayerTasteProfile profile = plugin.recommendations().getOrCreateProfile(uuid);
                     profile.ingestSpotifyArtists(stNames, mtNames);
 
-                    // Ingest real Spotify micro-genres from top artists
+                    // Ingest real Spotify micro-genres from top artists (idempotent, rank-weighted)
+                    profile.clearSpotifyGenreMass();
+                    int rank = 1;
+                    int stTotal = Math.max(1, st.size());
                     for (SpotifyArtistSummary a : st) {
-                        profile.ingestArtistGenres(a.genres());
+                        double weight = 1.0 * (1.0 - ((double) (rank - 1) / stTotal) * 0.5); // 1.0 down to 0.5
+                        profile.ingestSpotifyArtistGenres(a.genres(), weight);
+                        rank++;
                     }
+                    rank = 1;
+                    int mtTotal = Math.max(1, mt.size());
                     for (SpotifyArtistSummary a : mt) {
-                        profile.ingestArtistGenres(a.genres());
+                        double weight = 0.7 * (1.0 - ((double) (rank - 1) / mtTotal) * 0.5); // 0.7 down to 0.35
+                        profile.ingestSpotifyArtistGenres(a.genres(), weight);
+                        rank++;
                     }
 
                     // Related artists dynamic expansion removed (fixes F17: deprecated 404 endpoint & stops genre pollution)

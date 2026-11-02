@@ -39,8 +39,14 @@ public final class PlayerTasteProfile {
     /** Normalized artist affinities: artist name (lowercase) -> affinity weight (0.0 to 1.0). */
     private final Map<String, Double> artistAffinities = new ConcurrentHashMap<>();
 
-    /** Normalized micro-genre distribution: genre tag (lowercase) -> probability P(genre). */
-    private final Map<String, Double> genreDistribution = new ConcurrentHashMap<>();
+    /** Raw, unnormalized in-game play genre mass: genre tag (lowercase) -> accumulated mass. */
+    private final Map<String, Double> playGenreMass = new ConcurrentHashMap<>();
+
+    /** Raw, unnormalized Spotify top artist genre mass: genre tag (lowercase) -> mass (replaced on sync). */
+    private final Map<String, Double> spotifyGenreMass = new ConcurrentHashMap<>();
+
+    /** Cached read-time normalized probability distribution (P(genre), sum = 1.0). */
+    private volatile Map<String, Double> cachedGenreDistribution = null;
 
     /** Rolling fatigue history: newest entries at the end. */
     private final Deque<FatigueEntry> fatigueHistory = new ArrayDeque<>();
@@ -387,22 +393,69 @@ public final class PlayerTasteProfile {
     }
 
     /**
-     * Ingests micro-genres for an artist and updates the normalized genre distribution.
+     * Ingests micro-genres for an artist and updates the genre distribution.
+     *
+     * @deprecated Use {@link #ingestArtistGenres(List, double)} with explicit weight.
      */
+    @Deprecated
     public synchronized void ingestArtistGenres(List<String> genres) {
-        if (genres == null || genres.isEmpty()) return;
+        ingestArtistGenres(genres, 1.0);
+    }
 
+    /**
+     * Ingests micro-genres with a given weight, distributing {@code weight / cleanGenres.size()}
+     * into {@code playGenreMass} so artists with many tags do not dominate.
+     */
+    public synchronized void ingestArtistGenres(List<String> genres, double weight) {
+        if (genres == null || genres.isEmpty() || weight <= 0.0) return;
+        List<String> clean = new ArrayList<>();
         for (String g : genres) {
-            if (g == null || g.isBlank()) continue;
-            String key = g.toLowerCase(Locale.ROOT).trim();
-            genreDistribution.merge(key, Double.valueOf(1.0), (Double a, Double b) -> {
+            if (g != null && !g.isBlank()) {
+                clean.add(g.toLowerCase(Locale.ROOT).trim());
+            }
+        }
+        if (clean.isEmpty()) return;
+        double perTag = weight / clean.size();
+        for (String key : clean) {
+            playGenreMass.merge(key, Double.valueOf(perTag), (Double a, Double b) -> {
                 double va = (a != null) ? a.doubleValue() : 0.0;
                 double vb = (b != null) ? b.doubleValue() : 0.0;
                 return Double.valueOf(va + vb);
             });
         }
+        cachedGenreDistribution = null;
+    }
 
-        normalizeGenres();
+    /**
+     * Clears all Spotify genre mass in preparation for an idempotent full sync.
+     */
+    public synchronized void clearSpotifyGenreMass() {
+        spotifyGenreMass.clear();
+        cachedGenreDistribution = null;
+    }
+
+    /**
+     * Ingests micro-genres from Spotify top artists, distributing {@code weight / cleanGenres.size()}
+     * into {@code spotifyGenreMass}.
+     */
+    public synchronized void ingestSpotifyArtistGenres(List<String> genres, double weight) {
+        if (genres == null || genres.isEmpty() || weight <= 0.0) return;
+        List<String> clean = new ArrayList<>();
+        for (String g : genres) {
+            if (g != null && !g.isBlank()) {
+                clean.add(g.toLowerCase(Locale.ROOT).trim());
+            }
+        }
+        if (clean.isEmpty()) return;
+        double perTag = weight / clean.size();
+        for (String key : clean) {
+            spotifyGenreMass.merge(key, Double.valueOf(perTag), (Double a, Double b) -> {
+                double va = (a != null) ? a.doubleValue() : 0.0;
+                double vb = (b != null) ? b.doubleValue() : 0.0;
+                return Double.valueOf(va + vb);
+            });
+        }
+        cachedGenreDistribution = null;
     }
 
     private synchronized void normalizeAffinities() {
@@ -418,27 +471,51 @@ public final class PlayerTasteProfile {
         invalidateAffinityCache();
     }
 
-    private synchronized void normalizeGenres() {
-        if (genreDistribution.isEmpty()) return;
-        double sum = 0.0;
-        for (double val : genreDistribution.values()) {
-            sum += val;
-        }
-        if (sum > 0) {
-            final double s = sum;
-            genreDistribution.replaceAll((k, v) -> v / s);
-        }
-    }
-
     // =========================================================
     // SCORING QUERIES
     // =========================================================
 
     /**
-     * Returns the affinity score for a given artist (0.0 to 1.0).
+     * Returns the read-time normalized genre distribution summing to 1.0 (or empty map).
+     * Cached until the next profile genre mutation.
      */
     public Map<String, Double> getGenreDistribution() {
-        return Collections.unmodifiableMap(genreDistribution);
+        Map<String, Double> cached = cachedGenreDistribution;
+        if (cached != null) {
+            return cached;
+        }
+        synchronized (this) {
+            if (cachedGenreDistribution != null) {
+                return cachedGenreDistribution;
+            }
+            Map<String, Double> combined = new HashMap<>();
+            double totalSum = 0.0;
+            for (Map.Entry<String, Double> e : playGenreMass.entrySet()) {
+                Double v = e.getValue();
+                if (v != null && v.doubleValue() > 0.0) {
+                    combined.merge(e.getKey(), v, (Double a, Double b) -> Double.valueOf((a != null ? a.doubleValue() : 0.0) + (b != null ? b.doubleValue() : 0.0)));
+                    totalSum += v.doubleValue();
+                }
+            }
+            for (Map.Entry<String, Double> e : spotifyGenreMass.entrySet()) {
+                Double v = e.getValue();
+                if (v != null && v.doubleValue() > 0.0) {
+                    combined.merge(e.getKey(), v, (Double a, Double b) -> Double.valueOf((a != null ? a.doubleValue() : 0.0) + (b != null ? b.doubleValue() : 0.0)));
+                    totalSum += v.doubleValue();
+                }
+            }
+            if (totalSum <= 0.0 || combined.isEmpty()) {
+                cachedGenreDistribution = Collections.emptyMap();
+                return cachedGenreDistribution;
+            }
+            final double s = totalSum;
+            Map<String, Double> normalized = new HashMap<>();
+            for (Map.Entry<String, Double> e : combined.entrySet()) {
+                normalized.put(e.getKey(), Double.valueOf(e.getValue().doubleValue() / s));
+            }
+            cachedGenreDistribution = Collections.unmodifiableMap(normalized);
+            return cachedGenreDistribution;
+        }
     }
 
         /**
@@ -576,8 +653,13 @@ public final class PlayerTasteProfile {
      * Returns 0.0 to 1.0.
      */
     public double calculateGenreMatch(List<String> candidateGenres) {
-        if (candidateGenres == null || candidateGenres.isEmpty() || genreDistribution.isEmpty()) {
+        if (candidateGenres == null || candidateGenres.isEmpty()) {
             return 0.2; // neutral prior when no genre tags exist
+        }
+
+        Map<String, Double> dist = getGenreDistribution();
+        if (dist.isEmpty()) {
+            return 0.2;
         }
 
         double matchScore = 0.0;
@@ -585,7 +667,7 @@ public final class PlayerTasteProfile {
         for (String g : candidateGenres) {
             if (g == null || g.isBlank()) continue;
             String key = g.toLowerCase(Locale.ROOT).trim();
-            Double prob = genreDistribution.get(key);
+            Double prob = dist.get(key);
             if (prob != null) {
                 matchScore += prob * 10.0; // scale normalized prob
             }
@@ -750,14 +832,23 @@ public final class PlayerTasteProfile {
             }
         }
 
-        // 2. Blend genre distributions
+        // 2. Blend unnormalized genre masses across profiles
         for (PlayerTasteProfile p : profiles) {
-            for (Map.Entry<String, Double> e : p.genreDistribution.entrySet()) {
-                blend.genreDistribution.merge(e.getKey(), Double.valueOf(e.getValue().doubleValue() / n), (Double a, Double b) -> {
-                    double va = (a != null) ? a.doubleValue() : 0.0;
-                    double vb = (b != null) ? b.doubleValue() : 0.0;
-                    return Double.valueOf(va + vb);
-                });
+            synchronized (p) {
+                for (Map.Entry<String, Double> e : p.playGenreMass.entrySet()) {
+                    blend.playGenreMass.merge(e.getKey(), Double.valueOf(e.getValue().doubleValue() / n), (Double a, Double b) -> {
+                        double va = (a != null) ? a.doubleValue() : 0.0;
+                        double vb = (b != null) ? b.doubleValue() : 0.0;
+                        return Double.valueOf(va + vb);
+                    });
+                }
+                for (Map.Entry<String, Double> e : p.spotifyGenreMass.entrySet()) {
+                    blend.spotifyGenreMass.merge(e.getKey(), Double.valueOf(e.getValue().doubleValue() / n), (Double a, Double b) -> {
+                        double va = (a != null) ? a.doubleValue() : 0.0;
+                        double vb = (b != null) ? b.doubleValue() : 0.0;
+                        return Double.valueOf(va + vb);
+                    });
+                }
             }
         }
 
@@ -826,7 +917,7 @@ public final class PlayerTasteProfile {
         }
 
         blend.normalizeAffinities();
-        blend.normalizeGenres();
+        blend.cachedGenreDistribution = null;
         return blend;
     }
 
@@ -846,12 +937,27 @@ public final class PlayerTasteProfile {
         return Collections.unmodifiableMap(dynamicLineage);
     }
 
+    public Map<String, Double> getPlayGenreMass() {
+        return Collections.unmodifiableMap(playGenreMass);
+    }
+
+    public Map<String, Double> getSpotifyGenreMass() {
+        return Collections.unmodifiableMap(spotifyGenreMass);
+    }
+
     public synchronized String exportAffinitiesJson() {
         return new com.google.gson.Gson().toJson(artistAffinities);
     }
 
     public synchronized String exportGenresJson() {
-        return new com.google.gson.Gson().toJson(genreDistribution);
+        return new com.google.gson.Gson().toJson(getGenreDistribution());
+    }
+
+    public synchronized String exportGenreMassJson() {
+        Map<String, Map<String, Double>> root = new HashMap<>();
+        root.put("play", new HashMap<>(playGenreMass));
+        root.put("spotify", new HashMap<>(spotifyGenreMass));
+        return new com.google.gson.Gson().toJson(root);
     }
 
     public synchronized String exportDislikesJson() {
@@ -862,6 +968,7 @@ public final class PlayerTasteProfile {
         return new com.google.gson.Gson().toJson(dynamicLineage);
     }
 
+    @Deprecated
     public synchronized void restoreFromSnapshot(
             Map<String, Double> affinities,
             Map<String, Double> genres,
@@ -869,11 +976,26 @@ public final class PlayerTasteProfile {
             Map<String, Set<String>> lineage,
             long lastSync
     ) {
+        restoreFromSnapshot(affinities, genres, null, null, dislikes, lineage, lastSync);
+    }
+
+    public synchronized void restoreFromSnapshot(
+            Map<String, Double> affinities,
+            Map<String, Double> legacyGenres,
+            Map<String, Double> playMass,
+            Map<String, Double> spotifyMass,
+            Map<String, Long> dislikes,
+            Map<String, Set<String>> lineage,
+            long lastSync
+    ) {
         if (affinities != null && !affinities.isEmpty()) {
             this.artistAffinities.putAll(affinities);
         }
-        if (genres != null && !genres.isEmpty()) {
-            this.genreDistribution.putAll(genres);
+        if ((playMass != null && !playMass.isEmpty()) || (spotifyMass != null && !spotifyMass.isEmpty())) {
+            if (playMass != null) this.playGenreMass.putAll(playMass);
+            if (spotifyMass != null) this.spotifyGenreMass.putAll(spotifyMass);
+        } else if (legacyGenres != null && !legacyGenres.isEmpty()) {
+            this.playGenreMass.putAll(legacyGenres);
         }
         if (dislikes != null) {
             long now = System.currentTimeMillis();
@@ -893,6 +1015,8 @@ public final class PlayerTasteProfile {
         if (lastSync > 0) {
             this.lastSyncTimestamp = lastSync;
         }
+        this.cachedGenreDistribution = null;
+        invalidateAffinityCache();
     }
 
     public synchronized List<FatigueEntry> getFatigueHistory() {

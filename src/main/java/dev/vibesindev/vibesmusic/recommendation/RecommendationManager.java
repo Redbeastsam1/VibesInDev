@@ -103,6 +103,8 @@ public final class RecommendationManager implements org.bukkit.event.Listener {
             profile.restoreFromSnapshot(
                     snapshot.affinities(),
                     snapshot.genres(),
+                    snapshot.playGenreMass(),
+                    snapshot.spotifyGenreMass(),
                     snapshot.dislikes(),
                     snapshot.lineage(),
                     snapshot.lastSync()
@@ -312,7 +314,8 @@ public final class RecommendationManager implements org.bukkit.event.Listener {
                 profile.exportGenresJson(),
                 profile.exportDislikesJson(),
                 profile.exportLineageJson(),
-                profile.getLastSyncTimestamp()
+                profile.getLastSyncTimestamp(),
+                profile.exportGenreMassJson()
         );
     }
 

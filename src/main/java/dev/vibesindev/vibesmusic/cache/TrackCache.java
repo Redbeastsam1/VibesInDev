@@ -31,8 +31,20 @@ public final class TrackCache {
             Map<String, Double> genres,
             Map<String, Long> dislikes,
             Map<String, Set<String>> lineage,
-            long lastSync
-    ) {}
+            long lastSync,
+            Map<String, Double> playGenreMass,
+            Map<String, Double> spotifyGenreMass
+    ) {
+        public TasteProfileSnapshot(
+                Map<String, Double> affinities,
+                Map<String, Double> genres,
+                Map<String, Long> dislikes,
+                Map<String, Set<String>> lineage,
+                long lastSync
+        ) {
+            this(affinities, genres, dislikes, lineage, lastSync, null, null);
+        }
+    }
 
     private final Path root;
     private final Path audio;
@@ -114,8 +126,14 @@ public final class TrackCache {
                     "genres_json TEXT, " +
                     "dislikes_json TEXT, " +
                     "lineage_json TEXT, " +
-                    "last_sync INTEGER" +
+                    "last_sync INTEGER, " +
+                    "genre_mass_json TEXT" +
                     ")");
+            try {
+                stmt.execute("ALTER TABLE player_taste_profiles ADD COLUMN genre_mass_json TEXT");
+            } catch (SQLException ignored) {
+                // Column already exists
+            }
             stmt.execute("CREATE TABLE IF NOT EXISTS rec_impressions (" +
                     "impression_id TEXT PRIMARY KEY, " +
                     "ts INTEGER NOT NULL, " +
@@ -792,17 +810,19 @@ public final class TrackCache {
             String genresJson,
             String dislikesJson,
             String lineageJson,
-            long lastSync
+            long lastSync,
+            String genreMassJson
     ) {
         if (playerUuid == null) return;
-        String sql = "INSERT INTO player_taste_profiles (player_uuid, affinities_json, genres_json, dislikes_json, lineage_json, last_sync) " +
-                     "VALUES (?, ?, ?, ?, ?, ?) " +
+        String sql = "INSERT INTO player_taste_profiles (player_uuid, affinities_json, genres_json, dislikes_json, lineage_json, last_sync, genre_mass_json) " +
+                     "VALUES (?, ?, ?, ?, ?, ?, ?) " +
                      "ON CONFLICT(player_uuid) DO UPDATE SET " +
                      "affinities_json = excluded.affinities_json, " +
                      "genres_json = excluded.genres_json, " +
                      "dislikes_json = excluded.dislikes_json, " +
                      "lineage_json = excluded.lineage_json, " +
-                     "last_sync = excluded.last_sync;";
+                     "last_sync = excluded.last_sync, " +
+                     "genre_mass_json = excluded.genre_mass_json;";
         try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, playerUuid.toString());
             ps.setString(2, affinitiesJson != null ? affinitiesJson : "{}");
@@ -810,15 +830,28 @@ public final class TrackCache {
             ps.setString(4, dislikesJson != null ? dislikesJson : "{}");
             ps.setString(5, lineageJson != null ? lineageJson : "{}");
             ps.setLong(6, lastSync);
+            ps.setString(7, genreMassJson != null ? genreMassJson : "{}");
             ps.executeUpdate();
         } catch (SQLException e) {
             plugin.getLogger().warning("[VibesInDev] Error saving player taste profile to SQLite: " + e.getMessage());
         }
     }
 
+    @Deprecated
+    public void saveTasteProfile(
+            UUID playerUuid,
+            String affinitiesJson,
+            String genresJson,
+            String dislikesJson,
+            String lineageJson,
+            long lastSync
+    ) {
+        saveTasteProfile(playerUuid, affinitiesJson, genresJson, dislikesJson, lineageJson, lastSync, "{}");
+    }
+
     public TasteProfileSnapshot loadTasteProfile(UUID playerUuid) {
         if (playerUuid == null) return null;
-        String sql = "SELECT affinities_json, genres_json, dislikes_json, lineage_json, last_sync FROM player_taste_profiles WHERE player_uuid = ?";
+        String sql = "SELECT affinities_json, genres_json, dislikes_json, lineage_json, last_sync, genre_mass_json FROM player_taste_profiles WHERE player_uuid = ?";
         try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, playerUuid.toString());
             try (ResultSet rs = ps.executeQuery()) {
@@ -828,23 +861,47 @@ public final class TrackCache {
                     String disJson = rs.getString("dislikes_json");
                     String linJson = rs.getString("lineage_json");
                     long lastSync = rs.getLong("last_sync");
+                    String massJson = null;
+                    try {
+                        massJson = rs.getString("genre_mass_json");
+                    } catch (SQLException ignored) {}
 
                     Gson gson = new Gson();
                     java.lang.reflect.Type mapDouble = new TypeToken<Map<String, Double>>(){}.getType();
                     java.lang.reflect.Type mapLong = new TypeToken<Map<String, Long>>(){}.getType();
                     java.lang.reflect.Type mapSet = new TypeToken<Map<String, Set<String>>>(){}.getType();
+                    java.lang.reflect.Type mapMapDouble = new TypeToken<Map<String, Map<String, Double>>>(){}.getType();
 
                     Map<String, Double> affinities = affJson != null && !affJson.isBlank() ? gson.fromJson(affJson, mapDouble) : Collections.emptyMap();
                     Map<String, Double> genres = genJson != null && !genJson.isBlank() ? gson.fromJson(genJson, mapDouble) : Collections.emptyMap();
                     Map<String, Long> dislikes = disJson != null && !disJson.isBlank() ? gson.fromJson(disJson, mapLong) : Collections.emptyMap();
                     Map<String, Set<String>> lineage = linJson != null && !linJson.isBlank() ? gson.fromJson(linJson, mapSet) : Collections.emptyMap();
 
+                    Map<String, Double> playMass = null;
+                    Map<String, Double> spotifyMass = null;
+
+                    if (massJson != null && !massJson.isBlank() && !massJson.equals("{}")) {
+                        try {
+                            Map<String, Map<String, Double>> parsedMasses = gson.fromJson(massJson, mapMapDouble);
+                            if (parsedMasses != null) {
+                                playMass = parsedMasses.get("play");
+                                spotifyMass = parsedMasses.get("spotify");
+                            }
+                        } catch (Exception e) {
+                            try {
+                                playMass = gson.fromJson(massJson, mapDouble);
+                            } catch (Exception ignored) {}
+                        }
+                    }
+
                     return new TasteProfileSnapshot(
                             affinities != null ? affinities : Collections.emptyMap(),
                             genres != null ? genres : Collections.emptyMap(),
                             dislikes != null ? dislikes : Collections.emptyMap(),
                             lineage != null ? lineage : Collections.emptyMap(),
-                            lastSync
+                            lastSync,
+                            playMass,
+                            spotifyMass
                     );
                 }
             }

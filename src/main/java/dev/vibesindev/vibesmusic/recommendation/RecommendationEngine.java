@@ -623,6 +623,40 @@ public final class RecommendationEngine {
         };
     }
 
+    public static double calculateFamiliarity(
+            RecommendationCandidate candidate,
+            double artistAffinity,
+            double genreCosine,
+            boolean isLikedOrSaved,
+            boolean isPreviouslyCompleted,
+            boolean isSpotifyTopOrRecent
+    ) {
+        if (isLikedOrSaved) {
+            return 1.0;
+        }
+        if (candidate != null && candidate.source() == RecommendationCandidate.Source.FAMILIAR) {
+            return 1.0;
+        }
+        if (isPreviouslyCompleted) {
+            return 0.9;
+        }
+        if (isSpotifyTopOrRecent) {
+            return 0.8;
+        }
+        if (artistAffinity >= 0.5) {
+            return 0.7;
+        }
+        if (genreCosine >= 0.20) {
+            return 0.4;
+        }
+        return 0.0;
+    }
+
+    public static double calculateNovelty(double familiarity, double artistAffinity) {
+        double maxKnown = Math.max(Math.max(0.0, familiarity), Math.max(0.0, artistAffinity));
+        return Math.max(0.0, Math.min(1.0, 1.0 - maxKnown));
+    }
+
     public static double calculateCandidateScore(
             double genreCosine, boolean hasGenre,
             double artistAffinity,
@@ -749,6 +783,54 @@ public final class RecommendationEngine {
         List<CandidateEvaluation> explorePool = new ArrayList<>();
         Set<String> seenIds = new HashSet<>();
 
+        Set<String> likedKeys = new HashSet<>();
+        Set<String> spotifyKeys = new HashSet<>();
+        Set<String> completedKeys = new HashSet<>();
+
+        if (plugin != null && plugin.cache() != null && profile != null) {
+            List<UUID> memberUuids = new ArrayList<>();
+            if (profile.getSourceProfiles() != null && !profile.getSourceProfiles().isEmpty()) {
+                for (PlayerTasteProfile p : profile.getSourceProfiles()) {
+                    if (p != null && p.getPlayerUuid() != null) memberUuids.add(p.getPlayerUuid());
+                }
+            } else if (profile.getPlayerUuid() != null) {
+                memberUuids.add(profile.getPlayerUuid());
+            }
+
+            for (UUID u : memberUuids) {
+                List<Track> liked = plugin.cache().getLikedTracksForPlayer(u, 50);
+                if (liked != null) {
+                    for (Track lt : liked) {
+                        if (lt != null) {
+                            if (lt.id() != null) likedKeys.add(lt.id());
+                            String k = RecordingIdentity.compositionTitleKey(lt.title(), lt.artist());
+                            if (!k.isEmpty()) likedKeys.add(k);
+                        }
+                    }
+                }
+                List<Track> sp = plugin.cache().getPlayerSpotifyTracks(u, 50);
+                if (sp != null) {
+                    for (Track st : sp) {
+                        if (st != null) {
+                            if (st.id() != null) spotifyKeys.add(st.id());
+                            String k = RecordingIdentity.compositionTitleKey(st.title(), st.artist());
+                            if (!k.isEmpty()) spotifyKeys.add(k);
+                        }
+                    }
+                }
+            }
+        }
+
+        if (profile != null && profile.getFatigueHistory() != null) {
+            for (PlayerTasteProfile.FatigueEntry fe : profile.getFatigueHistory()) {
+                if (fe != null) {
+                    if (fe.trackId() != null) completedKeys.add(fe.trackId());
+                    String k = RecordingIdentity.compositionTitleKey(fe.title(), fe.artist());
+                    if (!k.isEmpty()) completedKeys.add(k);
+                }
+            }
+        }
+
         for (RecommendationCandidate c : candidates) {
             Track t = c.track();
             if (t == null || t.id() == null) continue;
@@ -795,21 +877,19 @@ public final class RecommendationEngine {
                     ? profile.calculateGenreCosineSimilarity(candidateGenres) : -1.0;
             if (genreCosine < 0.0) hasGenre = false;
 
-            // 6. Familiarity feature
-            double familiarity = 0.0;
-            if (c.source() == RecommendationCandidate.Source.FAMILIAR) {
-                familiarity = 1.0;
-            } else if (artistAffinity >= 0.5) {
-                familiarity = 0.70;
-            } else if (genreCosine >= 0.2) {
-                familiarity = 0.40;
-            }
+            // 6. Familiarity feature (Task 2.6)
+            String compKey = RecordingIdentity.compositionTitleKey(t.title(), t.artist());
+            boolean isLiked = (t.id() != null && likedKeys.contains(t.id())) || (!compKey.isEmpty() && likedKeys.contains(compKey));
+            boolean isSpotify = (t.id() != null && spotifyKeys.contains(t.id())) || (!compKey.isEmpty() && spotifyKeys.contains(compKey));
+            boolean isCompleted = (t.id() != null && completedKeys.contains(t.id())) || (!compKey.isEmpty() && completedKeys.contains(compKey));
+
+            double familiarity = calculateFamiliarity(c, artistAffinity, genreCosine, isLiked, isCompleted, isSpotify);
 
             // 7. Quality
             double quality = 1.0;
 
-            // 8. Novelty
-            double novelty = Math.max(0.0, Math.min(1.0, 1.0 - Math.max(familiarity, artistAffinity)));
+            // 8. Novelty (Task 2.6)
+            double novelty = calculateNovelty(familiarity, artistAffinity);
 
             // 9. Monopoly multiplier
             int occurrences = profile != null ? profile.getRecentArtistCount(t.artist()) : 0;

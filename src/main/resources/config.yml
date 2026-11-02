@@ -98,3 +98,9 @@ recommendations:
     like-gain: 0.25
     artist-skip-penalty: 0.10
     dislike-artist-factor: 0.15
+  # Engine v2 settings and staged rollout
+  engine-v2: true
+  engine-v2-rollout-percent: 0
+  # External metadata enrichment (optional)
+  external:
+    lastfm-api-key: ""

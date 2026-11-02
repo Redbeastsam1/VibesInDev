@@ -649,33 +649,62 @@ public final class PlayerTasteProfile {
     }
 
     /**
-     * Calculates cosine similarity between candidate micro-genres and this profile's genre distribution.
-     * Returns 0.0 to 1.0.
+     * Calculates cosine similarity between candidate micro-genres and this profile's normalized genre distribution.
+     * Returns a score between 0.0 and 1.0, or -1.0 if the candidate has no genres or profile has no genres (missing feature).
      */
-    public double calculateGenreMatch(List<String> candidateGenres) {
+    public double calculateGenreCosineSimilarity(List<String> candidateGenres) {
         if (candidateGenres == null || candidateGenres.isEmpty()) {
-            return 0.2; // neutral prior when no genre tags exist
+            return -1.0; // missing feature
         }
-
         Map<String, Double> dist = getGenreDistribution();
         if (dist.isEmpty()) {
-            return 0.2;
+            return -1.0; // missing feature
         }
 
-        double matchScore = 0.0;
-        int count = 0;
+        Set<String> cleanCandidate = new HashSet<>();
         for (String g : candidateGenres) {
-            if (g == null || g.isBlank()) continue;
-            String key = g.toLowerCase(Locale.ROOT).trim();
-            Double prob = dist.get(key);
-            if (prob != null) {
-                matchScore += prob * 10.0; // scale normalized prob
+            if (g != null && !g.isBlank()) {
+                cleanCandidate.add(g.toLowerCase(Locale.ROOT).trim());
             }
-            count++;
+        }
+        if (cleanCandidate.isEmpty()) {
+            return -1.0;
         }
 
-        if (count == 0) return 0.2;
-        return Math.min(1.0, matchScore / count);
+        double dotProduct = 0.0;
+        for (String g : cleanCandidate) {
+            Double p = dist.get(g);
+            if (p != null) {
+                dotProduct += p;
+            }
+        }
+
+        double profileNormSq = 0.0;
+        for (double p : dist.values()) {
+            profileNormSq += p * p;
+        }
+
+        if (profileNormSq <= 0.0 || dotProduct <= 0.0) {
+            return 0.0;
+        }
+
+        double candidateNorm = Math.sqrt(cleanCandidate.size());
+        double profileNorm = Math.sqrt(profileNormSq);
+
+        double cosine = dotProduct / (candidateNorm * profileNorm);
+        return Math.max(0.0, Math.min(1.0, cosine));
+    }
+
+    /**
+     * Calculates cosine similarity between candidate micro-genres and this profile's genre distribution.
+     * If candidate has no genre tags, returns 0.20 as backward-compatible neutral prior.
+     */
+    public double calculateGenreMatch(List<String> candidateGenres) {
+        double sim = calculateGenreCosineSimilarity(candidateGenres);
+        if (sim < 0.0) {
+            return 0.2; // neutral prior when missing
+        }
+        return sim;
     }
 
     /**

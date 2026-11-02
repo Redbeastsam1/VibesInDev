@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
@@ -37,10 +38,16 @@ public final class RecommendationEngine {
     private static final AtomicInteger THREAD_COUNTER = new AtomicInteger();
 
     private final VibesInDevPlugin plugin;
+    private final GenreResolver genreResolver;
     private final ExecutorService providerExecutor;
 
     public RecommendationEngine(VibesInDevPlugin plugin) {
+        this(plugin, null);
+    }
+
+    public RecommendationEngine(VibesInDevPlugin plugin, GenreResolver genreResolver) {
         this.plugin = plugin;
+        this.genreResolver = genreResolver != null ? genreResolver : new GenreResolver(plugin);
         this.providerExecutor = new ThreadPoolExecutor(
                 2, 8,
                 60L, TimeUnit.SECONDS,
@@ -52,6 +59,23 @@ public final class RecommendationEngine {
                 },
                 new ThreadPoolExecutor.CallerRunsPolicy()
         );
+    }
+
+    public GenreResolver genreResolver() {
+        return genreResolver;
+    }
+
+    public boolean isEngineV2Enabled(UUID playerUuid) {
+        if (plugin == null || plugin.getConfig() == null) return false;
+        if (plugin.getConfig().getBoolean("recommendations.engine-v2", false)) {
+            return true;
+        }
+        int rollout = plugin.getConfig().getInt("recommendations.engine-v2-rollout-percent", 0);
+        if (rollout <= 0) return false;
+        if (rollout >= 100) return true;
+        if (playerUuid == null) return false;
+        int bucket = Math.floorMod(playerUuid.hashCode(), 100);
+        return bucket < rollout;
     }
 
     public void shutdown() {
@@ -340,6 +364,128 @@ public final class RecommendationEngine {
      * Score = 0.35 * GenreMatch + 0.30 * ArtistAffinity + 0.20 * Continuity + 0.15 * Discovery - Fatigue + CacheBonus
      */
     Track scoreAndPickBest(
+            List<RecommendationCandidate> candidates,
+            Track seed,
+            PlayerTasteProfile profile
+    ) {
+        UUID uuid = profile != null ? profile.getPlayerUuid() : null;
+        if (isEngineV2Enabled(uuid)) {
+            return scoreAndPickBestV2(candidates, seed, profile);
+        }
+        return scoreAndPickBestLegacy(candidates, seed, profile);
+    }
+
+    Track scoreAndPickBestV2(
+            List<RecommendationCandidate> candidates,
+            Track seed,
+            PlayerTasteProfile profile
+    ) {
+        if (candidates == null || candidates.isEmpty()) {
+            return null;
+        }
+
+        // Background warm candidate genres so future scoring passes hit cache
+        if (genreResolver != null) {
+            List<String> artists = new ArrayList<>();
+            for (RecommendationCandidate c : candidates) {
+                if (c.track() != null && c.track().artist() != null) {
+                    artists.add(c.track().artist());
+                }
+            }
+            genreResolver.warmCandidateGenres(artists);
+        }
+
+        int cooldownTracks = plugin != null && plugin.getConfig() != null ? plugin.getConfig().getInt("recommendations.cooldown-tracks", 20) : 20;
+        long cooldownMs = (plugin != null && plugin.getConfig() != null ? plugin.getConfig().getLong("recommendations.cooldown-minutes", 45) : 45) * 60_000L;
+        long minDur = plugin != null && plugin.getConfig() != null ? plugin.getConfig().getLong("recommendations.min-duration-seconds", 60) : 60;
+        long maxDur = plugin != null && plugin.getConfig() != null ? plugin.getConfig().getLong("recommendations.max-duration-seconds", 600) : 600;
+        double explorationRatio = plugin != null && plugin.getConfig() != null ? plugin.getConfig().getDouble("recommendations.exploration-ratio", 0.20) : 0.20;
+        double cacheBonusValue = plugin != null && plugin.getConfig() != null ? plugin.getConfig().getDouble("recommendations.cache-bonus", 0.05) : 0.05;
+
+        boolean explore = RANDOM.nextDouble() < explorationRatio;
+
+        List<RecommendationCandidate> scored = new ArrayList<>();
+        Set<String> seenIds = new HashSet<>();
+
+        for (RecommendationCandidate c : candidates) {
+            Track t = c.track();
+            if (t == null || t.id() == null) continue;
+            if (seenIds.contains(t.id())) continue;
+            seenIds.add(t.id());
+
+            // 0. STRICT SEED DUPLICATE FILTER: Never recommend the seed track or its remixes/slowed versions
+            if (seed != null && PlayerTasteProfile.isSameSongOrRemix(t, seed)) {
+                continue;
+            }
+
+            // 1. Duration guardrails
+            if (t.durationSeconds() > 0) {
+                if (t.durationSeconds() < minDur || t.durationSeconds() > maxDur) {
+                    continue; // Discard meme clips or multi-hour mixes
+                }
+            }
+
+            // 2. Strict fatigue check (never repeat tracks or duplicate songs heard in last 20 songs or 45 min)
+            if (profile != null && profile.isFatigued(t, cooldownTracks, cooldownMs)) {
+                continue;
+            }
+
+            // 3. Artist affinity score (0.0 to 1.0)
+            double artistAffinity = profile != null ? profile.getArtistAffinity(t.artist()) : 0.2;
+
+            // 4. Vibe continuity (keeps playback in a consistent Daily Mix cluster)
+            double continuity = 0.5;
+            if (seed != null) {
+                if (ArtistNames.sameArtist(seed.artist(), t.artist())) {
+                    continuity = 0.85;
+                } else if (c.source() == RecommendationCandidate.Source.YOUTUBE_RADIO) {
+                    continuity = 0.75; // YouTube RD algorithm already clustered it with seed
+                }
+            }
+
+            // 5. Real Genre Similarity (fixes F6, F15)
+            // Stream-based priors removed! Candidates from all streams earn genre score via real similarity.
+            List<String> candidateGenres = (genreResolver != null && t.artist() != null)
+                    ? genreResolver.getCachedGenres(t.artist()) : Collections.emptyList();
+            double genreCosine = (profile != null)
+                    ? profile.calculateGenreCosineSimilarity(candidateGenres) : -1.0;
+            // Missing feature is neutral (0.20), real match uses cosine similarity [0.0, 1.0]
+            double genreMatch = (genreCosine >= 0.0) ? genreCosine : 0.20;
+
+            // 6. Discovery exploration bonus
+            double discovery = (explore && artistAffinity < 0.2) ? 0.8 : 0.1;
+
+            // 7. Base Multi-Objective Score
+            double score = (0.35 * genreMatch)
+                    + (0.30 * artistAffinity)
+                    + (0.20 * continuity)
+                    + (0.15 * discovery);
+
+            // 8. Monopoly vs continuity: graded multiplier over occurrences in last 4 plays
+            if (profile != null) {
+                int occurrences = profile.getRecentArtistCount(t.artist());
+                double monopolyMultiplier = getMonopolyMultiplier(occurrences);
+                score *= monopolyMultiplier;
+            }
+
+            // 9. Cache bonus (already downloaded OGG saves download time)
+            if (c.cachedLocally()) {
+                score += cacheBonusValue;
+            }
+
+            scored.add(new RecommendationCandidate(t, score, c.source(), c.reason(), c.cachedLocally()));
+        }
+
+        if (scored.isEmpty()) {
+            return null;
+        }
+
+        // Sort descending by score
+        Collections.sort(scored);
+        return scored.get(0).track();
+    }
+
+    Track scoreAndPickBestLegacy(
             List<RecommendationCandidate> candidates,
             Track seed,
             PlayerTasteProfile profile

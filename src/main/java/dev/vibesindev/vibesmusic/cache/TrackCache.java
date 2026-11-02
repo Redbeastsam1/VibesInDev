@@ -1,6 +1,7 @@
 package dev.vibesindev.vibesmusic.cache;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.Locale;
 
 import dev.vibesindev.vibesmusic.VibesInDevPlugin;
 import dev.vibesindev.vibesmusic.model.Track;
@@ -134,6 +135,12 @@ public final class TrackCache {
             } catch (SQLException ignored) {
                 // Column already exists
             }
+            stmt.execute("CREATE TABLE IF NOT EXISTS artist_genres (" +
+                    "artist_norm TEXT PRIMARY KEY, " +
+                    "genres_json TEXT NOT NULL, " +
+                    "source TEXT NOT NULL, " +
+                    "fetched_at INTEGER NOT NULL" +
+                    ")");
             stmt.execute("CREATE TABLE IF NOT EXISTS rec_impressions (" +
                     "impression_id TEXT PRIMARY KEY, " +
                     "ts INTEGER NOT NULL, " +
@@ -941,6 +948,49 @@ public final class TrackCache {
             plugin.getLogger().warning("[VibesInDev] Error loading fatigue history: " + e.getMessage());
         }
         return list;
+    }
+
+    // =======================================================
+    // ARTIST GENRE CACHE (Phase 2.1)
+    // =======================================================
+
+    public record CachedArtistGenres(List<String> genres, String source, long fetchedAt) {}
+
+    public CachedArtistGenres getCachedArtistGenres(String artistNorm) {
+        if (artistNorm == null || artistNorm.isBlank()) return null;
+        String sql = "SELECT genres_json, source, fetched_at FROM artist_genres WHERE artist_norm = ?";
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, artistNorm.toLowerCase(Locale.ROOT).trim());
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    String json = rs.getString("genres_json");
+                    String src = rs.getString("source");
+                    long ts = rs.getLong("fetched_at");
+                    Gson gson = new Gson();
+                    java.lang.reflect.Type type = new TypeToken<List<String>>(){}.getType();
+                    List<String> list = (json != null && !json.isBlank()) ? gson.fromJson(json, type) : Collections.emptyList();
+                    return new CachedArtistGenres(list != null ? list : Collections.emptyList(), src, ts);
+                }
+            }
+        } catch (Exception e) {
+            plugin.getLogger().warning("[VibesInDev] Error reading artist_genres: " + e.getMessage());
+        }
+        return null;
+    }
+
+    public void saveArtistGenres(String artistNorm, List<String> genres, String source) {
+        if (artistNorm == null || artistNorm.isBlank()) return;
+        String sql = "INSERT INTO artist_genres (artist_norm, genres_json, source, fetched_at) VALUES (?, ?, ?, ?) " +
+                     "ON CONFLICT(artist_norm) DO UPDATE SET genres_json = excluded.genres_json, source = excluded.source, fetched_at = excluded.fetched_at";
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, artistNorm.toLowerCase(Locale.ROOT).trim());
+            ps.setString(2, new Gson().toJson(genres != null ? genres : Collections.emptyList()));
+            ps.setString(3, source != null ? source : "UNKNOWN");
+            ps.setLong(4, System.currentTimeMillis());
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            plugin.getLogger().warning("[VibesInDev] Error saving artist_genres: " + e.getMessage());
+        }
     }
 
     // =======================================================

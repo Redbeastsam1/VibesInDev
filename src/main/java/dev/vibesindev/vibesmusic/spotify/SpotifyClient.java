@@ -2067,7 +2067,49 @@ public final class SpotifyClient {
 
     }
 
+    public boolean isFeatureAvailable(SpotifyHttp.Feature feature) {
+        return spotifyHttp == null || !spotifyHttp.isFeatureDisabled(feature);
+    }
 
+    public CompletableFuture<List<String>> searchArtistGenres(String artistName) {
+        if (artistName == null || artistName.isBlank() || !isFeatureAvailable(SpotifyHttp.Feature.ARTIST_LOOKUP)) {
+            return CompletableFuture.completedFuture(Collections.emptyList());
+        }
+        return getClientToken().thenCompose(token -> {
+            String url = API_URL + "/search?q=" + enc(artistName) + "&type=artist&limit=1";
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .timeout(Duration.ofSeconds(10))
+                    .header("Authorization", "Bearer " + token)
+                    .GET()
+                    .build();
+            return http.sendAsync(request, HttpResponse.BodyHandlers.ofString())
+                    .thenApply(res -> {
+                        List<String> genres = new ArrayList<>();
+                        if (res.statusCode() == 200 && res.body() != null) {
+                            try {
+                                com.google.gson.JsonObject root = com.google.gson.JsonParser.parseString(res.body()).getAsJsonObject();
+                                if (root.has("artists") && root.getAsJsonObject("artists").has("items")) {
+                                    com.google.gson.JsonArray items = root.getAsJsonObject("artists").getAsJsonArray("items");
+                                    if (items.size() > 0) {
+                                        com.google.gson.JsonObject artistObj = items.get(0).getAsJsonObject();
+                                        if (artistObj.has("genres")) {
+                                            for (com.google.gson.JsonElement el : artistObj.getAsJsonArray("genres")) {
+                                                genres.add(el.getAsString());
+                                            }
+                                        }
+                                    }
+                                }
+                            } catch (Exception e) {
+                                plugin.getLogger().warning("[VibesInDev] Failed to parse artist genres search: " + e.getMessage());
+                            }
+                        } else if (res.statusCode() == 404 || res.statusCode() == 403 || res.statusCode() == 410) {
+                            spotifyHttp.disableFeature(SpotifyHttp.Feature.ARTIST_LOOKUP);
+                        }
+                        return genres;
+                    }).exceptionally(ex -> Collections.emptyList());
+        });
+    }
 
     /**
 

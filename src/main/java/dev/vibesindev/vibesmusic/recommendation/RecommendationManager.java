@@ -22,6 +22,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class RecommendationManager implements org.bukkit.event.Listener {
 
     private final VibesInDevPlugin plugin;
+    private final GenreResolver genreResolver;
     private final RecommendationEngine engine;
 
     /** Per-player taste profile models. */
@@ -35,8 +36,13 @@ public final class RecommendationManager implements org.bukkit.event.Listener {
 
     public RecommendationManager(VibesInDevPlugin plugin) {
         this.plugin = plugin;
-        this.engine = new RecommendationEngine(plugin);
+        this.genreResolver = new GenreResolver(plugin);
+        this.engine = new RecommendationEngine(plugin, this.genreResolver);
         loadConfiguredLineages();
+    }
+
+    public GenreResolver genreResolver() {
+        return genreResolver;
     }
 
     public RecommendationEngine engine() {
@@ -167,14 +173,29 @@ public final class RecommendationManager implements org.bukkit.event.Listener {
 
     public void recordOutcome(UUID playerUuid, Track track, long playedMs, long durationMs, Outcome outcome) {
         if (playerUuid == null || track == null) return;
-        getOrCreateProfile(playerUuid).recordOutcome(track, playedMs, durationMs, outcome,
+        PlayerTasteProfile profile = getOrCreateProfile(playerUuid);
+        profile.recordOutcome(track, playedMs, durationMs, outcome,
                 plugin != null ? plugin.getConfig() : null);
+
+        // Task 2.1: Ingest track genres on completion
+        double ratio = (durationMs > 0) ? (double) playedMs / durationMs : 0.0;
+        if (outcome == Outcome.COMPLETED || ratio >= 0.80) {
+            double gain = (plugin != null && plugin.getConfig() != null)
+                    ? plugin.getConfig().getDouble("recommendations.signals.completion-gain", 0.08) : 0.08;
+            if (genreResolver != null && track.artist() != null) {
+                List<String> genres = genreResolver.getCachedGenres(track.artist());
+                if (genres != null && !genres.isEmpty()) {
+                    profile.ingestArtistGenres(genres, gain);
+                }
+            }
+        }
+
         saveProfile(playerUuid);
 
         String imprId = activeImpressionIds.get(playerUuid);
         if (imprId != null && plugin != null && plugin.cache() != null) {
-            double ratio = (durationMs > 0) ? Math.min(1.0, (double) playedMs / durationMs) : (outcome == Outcome.COMPLETED ? 1.0 : 0.0);
-            plugin.cache().updateRecImpressionOutcome(imprId, ratio, outcome != null ? outcome.name() : "UNKNOWN");
+            double outcomeRatio = (durationMs > 0) ? Math.min(1.0, (double) playedMs / durationMs) : (outcome == Outcome.COMPLETED ? 1.0 : 0.0);
+            plugin.cache().updateRecImpressionOutcome(imprId, outcomeRatio, outcome != null ? outcome.name() : "UNKNOWN");
         }
     }
 

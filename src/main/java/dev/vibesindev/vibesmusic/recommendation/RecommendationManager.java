@@ -289,12 +289,28 @@ public final class RecommendationManager implements org.bukkit.event.Listener {
             for (UUID memberId : party.getMembers()) {
                 memberProfiles.add(getOrCreateProfile(memberId));
             }
-            profile = PlayerTasteProfile.blend(memberProfiles);
+            profile = PlayerTasteProfile.blend(party.getPartyId(), memberProfiles);
         } else {
             profile = getOrCreateProfile(playerUuid);
         }
 
         return engine.recommendNextRanked(seed, profile);
+    }
+
+    // =========================================================
+    // EXPLAINABILITY & LAST PICKS
+    // =========================================================
+
+    private final Map<UUID, RankedPick> lastAutoplayPicks = new ConcurrentHashMap<>();
+
+    public void setLastAutoplayPick(UUID targetUuid, RankedPick pick) {
+        if (targetUuid == null || pick == null) return;
+        lastAutoplayPicks.put(targetUuid, pick);
+    }
+
+    public RankedPick getLastAutoplayPick(UUID targetUuid) {
+        if (targetUuid == null) return null;
+        return lastAutoplayPicks.get(targetUuid);
     }
 
     /**

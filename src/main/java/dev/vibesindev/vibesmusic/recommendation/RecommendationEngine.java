@@ -800,6 +800,53 @@ public final class RecommendationEngine {
         return score;
     }
 
+    public static String buildExplainabilityReason(
+            RecommendationMode mode,
+            RecommendationCandidate.Source source,
+            double genreCosine, boolean hasGenre,
+            double artistAffinity,
+            double continuity,
+            double familiarity,
+            double quality,
+            double novelty,
+            double[] weights
+    ) {
+        record Term(String name, double val) implements Comparable<Term> {
+            @Override
+            public int compareTo(Term o) {
+                return Double.compare(o.val, this.val);
+            }
+        }
+
+        List<Term> terms = new ArrayList<>(6);
+        if (hasGenre && weights != null && weights.length > 0 && weights[0] > 0.0) {
+            terms.add(new Term("genre match", weights[0] * Math.max(0.0, genreCosine)));
+        }
+        if (weights != null && weights.length > 1 && weights[1] > 0.0) {
+            terms.add(new Term("artist affinity", weights[1] * Math.max(0.0, artistAffinity)));
+        }
+        if (weights != null && weights.length > 2 && weights[2] > 0.0) {
+            terms.add(new Term("vibe continuity", weights[2] * Math.max(0.0, continuity)));
+        }
+        if (weights != null && weights.length > 3 && weights[3] > 0.0) {
+            terms.add(new Term("familiarity", weights[3] * Math.max(0.0, familiarity)));
+        }
+        if (weights != null && weights.length > 4 && weights[4] > 0.0) {
+            terms.add(new Term("audio quality", weights[4] * Math.max(0.0, quality)));
+        }
+        if (weights != null && weights.length > 5 && weights[5] > 0.0) {
+            terms.add(new Term("novelty discovery", weights[5] * Math.max(0.0, novelty)));
+        }
+
+        Collections.sort(terms);
+
+        String top1 = !terms.isEmpty() ? terms.get(0).name() : "relevance";
+        String top2 = terms.size() > 1 ? terms.get(1).name() : null;
+
+        String termsStr = (top2 != null) ? (top1 + " & " + top2) : top1;
+        return mode.name() + " mode via " + source.name() + " (" + termsStr + ")";
+    }
+
     private record CandidateEvaluation(
             RecommendationCandidate candidate,
             double genreCosine,
@@ -1093,9 +1140,15 @@ public final class RecommendationEngine {
                     weights, minFeatureCoverage, ev.monopolyMultiplier, ev.candidate.cachedLocally(), cacheBonusValue
             );
             if (score >= 0.0) {
+                String reason = buildExplainabilityReason(
+                        effectiveMode, ev.candidate.source(),
+                        ev.genreCosine, ev.hasGenre,
+                        ev.artistAffinity, ev.continuity, ev.familiarity, ev.quality, ev.novelty,
+                        weights
+                );
                 scored.add(new RecommendationCandidate(
                         ev.candidate.track(), score, ev.candidate.source(),
-                        ev.candidate.reason() + " [" + effectiveMode.name() + "]", ev.candidate.cachedLocally()
+                        reason, ev.candidate.cachedLocally()
                 ));
             }
         }

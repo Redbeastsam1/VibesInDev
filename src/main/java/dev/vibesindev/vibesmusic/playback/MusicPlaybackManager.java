@@ -2104,6 +2104,9 @@ public final class MusicPlaybackManager {
         prepareTrack(track).thenAccept(path -> {
             plugin.getServer().getScheduler().runTask(plugin, () -> {
                 if (player.isOnline() && !plugin.network().isPlaying(player)) {
+                    if (plugin.recommendations() != null) {
+                        plugin.recommendations().setLastAutoplayPick(uuid, pick);
+                    }
                     plugin.recommendations().sendAutoplayNotification(player, track);
                     startTrack(player, track, true);
                 }
@@ -2164,6 +2167,10 @@ public final class MusicPlaybackManager {
             plugin.getServer().getScheduler().runTask(plugin, () -> {
                 Player currentOwner = plugin.getServer().getPlayer(party.getOwner());
                 if (currentOwner != null && currentOwner.isOnline()) {
+                    if (plugin.recommendations() != null) {
+                        plugin.recommendations().setLastAutoplayPick(party.getPartyId(), pick);
+                        plugin.recommendations().setLastAutoplayPick(party.getOwner(), pick);
+                    }
                     broadcastToPartyAll(party,
                             ChatColor.LIGHT_PURPLE + "♫ Party Autoplay: "
                                     + ChatColor.WHITE + track.title()

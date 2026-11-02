@@ -847,10 +847,17 @@ public final class PlayerTasteProfile {
      * Computes the centroid taste vector combining multiple players' profiles into a unified party blend.
      */
     public static PlayerTasteProfile blend(List<PlayerTasteProfile> profiles) {
+        return blend(UUID.randomUUID(), profiles);
+    }
+
+    /**
+     * Computes the centroid taste vector for a specific party ID.
+     */
+    public static PlayerTasteProfile blend(UUID partyUuid, List<PlayerTasteProfile> profiles) {
         if (profiles == null || profiles.isEmpty()) {
-            return new PlayerTasteProfile(UUID.randomUUID());
+            return new PlayerTasteProfile(partyUuid != null ? partyUuid : UUID.randomUUID());
         }
-        PlayerTasteProfile blend = new PlayerTasteProfile(UUID.randomUUID(), profiles);
+        PlayerTasteProfile blend = new PlayerTasteProfile(partyUuid != null ? partyUuid : UUID.randomUUID(), profiles);
 
         int n = profiles.size();
 

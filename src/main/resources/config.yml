@@ -98,8 +98,10 @@ recommendations:
     like-gain: 0.25
     artist-skip-penalty: 0.10
     dislike-artist-factor: 0.15
-  # Engine v2 settings and staged rollout
-  engine-v2: true
+  # Engine v2 settings and staged rollout (Task 2.10)
+  # When engine-v2 is true, v2 is forced for all players.
+  # When engine-v2 is false, rollout-percent (0-100) gates v2 per player/party hash bucket.
+  engine-v2: false
   engine-v2-rollout-percent: 0
   genre-sample-temperature: 1.0
   per-genre-limit: 12

@@ -842,11 +842,9 @@ public final class RecommendationEngine {
                 continue;
             }
 
-            // 1. Duration guardrails
-            if (t.durationSeconds() > 0) {
-                if (t.durationSeconds() < minDur || t.durationSeconds() > maxDur) {
-                    continue;
-                }
+            // 1. CandidateFilter hard rejection (blacklist & duration)
+            if (CandidateFilter.isHardRejected(t.title(), t.durationSeconds(), c.source(), minDur, maxDur)) {
+                continue;
             }
 
             // 2. Strict fatigue check
@@ -885,8 +883,15 @@ public final class RecommendationEngine {
 
             double familiarity = calculateFamiliarity(c, artistAffinity, genreCosine, isLiked, isCompleted, isSpotify);
 
-            // 7. Quality
-            double quality = 1.0;
+            // 7. Quality (CandidateFilter: Topic/VEVO boost, reupload penalty, live/slowed version soft penalty)
+            List<String> reuploads = (plugin != null && plugin.getConfig() != null)
+                    ? plugin.getConfig().getStringList("recommendations.reupload-channel-patterns") : null;
+            double quality = CandidateFilter.evaluateQuality(
+                    t.title(),
+                    seed != null ? seed.title() : null,
+                    t.artist(),
+                    reuploads
+            );
 
             // 8. Novelty (Task 2.6)
             double novelty = calculateNovelty(familiarity, artistAffinity);

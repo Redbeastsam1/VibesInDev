@@ -45,9 +45,21 @@ public final class RecommendationManager implements org.bukkit.event.Listener {
         this.plugin = plugin;
         this.genreResolver = new GenreResolver(plugin);
         this.enricher = new ArtistLineageEnricher(plugin);
+        this.contextSampler = new MinecraftContextSampler(plugin);
         this.engine = (engine != null) ? engine : new RecommendationEngine(plugin, this.genreResolver);
         loadConfiguredLineages();
         initTelemetryPruning();
+        if (plugin != null && org.bukkit.Bukkit.getServer() != null) {
+            try {
+                org.bukkit.Bukkit.getPluginManager().registerEvents(this.contextSampler, plugin);
+            } catch (Throwable ignored) {}
+        }
+    }
+
+    private final MinecraftContextSampler contextSampler;
+
+    public MinecraftContextSampler contextSampler() {
+        return contextSampler;
     }
 
     private void initTelemetryPruning() {
@@ -384,6 +396,9 @@ public final class RecommendationManager implements org.bukkit.event.Listener {
 
         UUID targetUuid = (party != null && party.getMemberCount() > 1) ? party.getPartyId() : playerUuid;
         SessionContext sessionContext = getOrCreateSessionContext(targetUuid);
+        if (contextSampler != null) {
+            sessionContext.setMinecraftContext(contextSampler.sample(playerUuid));
+        }
         CompletableFuture<List<RankedPick>> future = (engine != null)
                 ? engine.recommendNextRanked(seed, profile, sessionContext)
                 : CompletableFuture.completedFuture(Collections.emptyList());

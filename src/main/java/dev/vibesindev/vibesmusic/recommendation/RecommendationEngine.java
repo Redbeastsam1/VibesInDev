@@ -127,10 +127,20 @@ public final class RecommendationEngine {
      * @return future resolving to the highest-scoring recommended track, or {@code null} if all fail
      */
     public CompletableFuture<List<RankedPick>> recommendNextRanked(Track seed, PlayerTasteProfile profile) {
-        return recommendNextRanked(seed, profile, null);
+        return recommendNextRanked(seed, profile, null, null);
     }
 
     public CompletableFuture<List<RankedPick>> recommendNextRanked(Track seed, PlayerTasteProfile profile, SessionContext sessionContext) {
+        MinecraftContextSampler.ContextSnapshot snapshot = sessionContext != null ? sessionContext.getMinecraftContext() : null;
+        return recommendNextRanked(seed, profile, sessionContext, snapshot);
+    }
+
+    public CompletableFuture<List<RankedPick>> recommendNextRanked(
+            Track seed,
+            PlayerTasteProfile profile,
+            SessionContext sessionContext,
+            MinecraftContextSampler.ContextSnapshot contextSnapshot
+    ) {
         if (seed == null) {
             // Task 4.4: Cold start without seed — seed from server trending filtered through Stream C
             Track trendingSeed = null;
@@ -141,7 +151,7 @@ public final class RecommendationEngine {
                 }
             }
             if (trendingSeed != null && plugin != null && plugin.ytDlp() != null) {
-                return recommendNextRanked(trendingSeed, profile, sessionContext);
+                return recommendNextRanked(trendingSeed, profile, sessionContext, contextSnapshot);
             }
             return fallbackTrendingRanked(seed, profile);
         }
@@ -179,7 +189,7 @@ public final class RecommendationEngine {
             futures.add(fetchFamiliarCandidates(seed, profile));
         }
 
-        return gatherAndPickRanked(futures, seed, profile, sessionContext);
+        return gatherAndPickRanked(futures, seed, profile, sessionContext, contextSnapshot);
     }
 
     public CompletableFuture<Track> recommendNext(Track seed, PlayerTasteProfile profile) {
@@ -195,7 +205,7 @@ public final class RecommendationEngine {
             Track seed,
             PlayerTasteProfile profile
     ) {
-        return gatherAndPickRanked(streamFutures, seed, profile, null);
+        return gatherAndPickRanked(streamFutures, seed, profile, null, null);
     }
 
     public CompletableFuture<List<RankedPick>> gatherAndPickRanked(
@@ -203,6 +213,17 @@ public final class RecommendationEngine {
             Track seed,
             PlayerTasteProfile profile,
             SessionContext sessionContext
+    ) {
+        MinecraftContextSampler.ContextSnapshot snapshot = sessionContext != null ? sessionContext.getMinecraftContext() : null;
+        return gatherAndPickRanked(streamFutures, seed, profile, sessionContext, snapshot);
+    }
+
+    public CompletableFuture<List<RankedPick>> gatherAndPickRanked(
+            List<CompletableFuture<List<RecommendationCandidate>>> streamFutures,
+            Track seed,
+            PlayerTasteProfile profile,
+            SessionContext sessionContext,
+            MinecraftContextSampler.ContextSnapshot contextSnapshot
     ) {
         List<CompletableFuture<List<RecommendationCandidate>>> guardedFutures = new ArrayList<>();
         if (streamFutures != null) {
@@ -236,7 +257,7 @@ public final class RecommendationEngine {
                     }
 
                     // Score and rank candidates
-                    List<RankedPick> picks = scoreAndRankCandidates(candidates, seed, profile, sessionContext);
+                    List<RankedPick> picks = scoreAndRankCandidates(candidates, seed, profile, sessionContext, contextSnapshot);
                     if (picks != null && !picks.isEmpty()) {
                         return CompletableFuture.completedFuture(picks);
                     }
@@ -710,9 +731,20 @@ public final class RecommendationEngine {
             PlayerTasteProfile profile,
             SessionContext sessionContext
     ) {
+        MinecraftContextSampler.ContextSnapshot snapshot = sessionContext != null ? sessionContext.getMinecraftContext() : null;
+        return scoreAndRankCandidates(candidates, seed, profile, sessionContext, snapshot);
+    }
+
+    public List<RankedPick> scoreAndRankCandidates(
+            List<RecommendationCandidate> candidates,
+            Track seed,
+            PlayerTasteProfile profile,
+            SessionContext sessionContext,
+            MinecraftContextSampler.ContextSnapshot contextSnapshot
+    ) {
         UUID uuid = profile != null ? profile.getPlayerUuid() : null;
         if (isEngineV2Enabled(uuid)) {
-            return scoreAndRankCandidatesV2(candidates, seed, profile, sessionContext, RANDOM);
+            return scoreAndRankCandidatesV2(candidates, seed, profile, sessionContext, contextSnapshot, RANDOM);
         }
         Track best = scoreAndPickBestLegacy(candidates, seed, profile);
         if (best != null) {
@@ -1015,6 +1047,45 @@ public final class RecommendationEngine {
             Track seed,
             PlayerTasteProfile profile,
             SessionContext sessionContext,
+            Random random
+    ) {
+        return scoreAndRankCandidatesV2(candidates, seed, profile, sessionContext, null, random);
+    }
+
+    public static Double estimateEnergyFromGenre(List<String> genres) {
+        if (genres == null || genres.isEmpty()) return null;
+        for (String g : genres) {
+            String lower = g.toLowerCase(Locale.ROOT);
+            if (lower.contains("ambient") || lower.contains("classical") || lower.contains("lo-fi")
+                    || lower.contains("lofi") || lower.contains("chill") || lower.contains("piano")
+                    || lower.contains("drone") || lower.contains("new age")) {
+                return 0.25;
+            }
+            if (lower.contains("metal") || lower.contains("rock") || lower.contains("phonk")
+                    || lower.contains("dubstep") || lower.contains("drum and bass") || lower.contains("dnb")
+                    || lower.contains("hardstyle") || lower.contains("edm") || lower.contains("techno")
+                    || lower.contains("trap") || lower.contains("drill")) {
+                return 0.85;
+            }
+            if (lower.contains("pop") || lower.contains("hip hop") || lower.contains("rap")
+                    || lower.contains("dance") || lower.contains("funk") || lower.contains("reggaeton")
+                    || lower.contains("electronic")) {
+                return 0.65;
+            }
+            if (lower.contains("jazz") || lower.contains("indie") || lower.contains("folk")
+                    || lower.contains("r&b") || lower.contains("soul") || lower.contains("acoustic")) {
+                return 0.45;
+            }
+        }
+        return 0.50;
+    }
+
+    List<RankedPick> scoreAndRankCandidatesV2(
+            List<RecommendationCandidate> candidates,
+            Track seed,
+            PlayerTasteProfile profile,
+            SessionContext sessionContext,
+            MinecraftContextSampler.ContextSnapshot contextSnapshot,
             Random random
     ) {
         if (candidates == null || candidates.isEmpty()) {
@@ -1367,6 +1438,35 @@ public final class RecommendationEngine {
                     learnedScore = learnedRanker.computeLearnedScore(normFeats);
                     finalScore = learnedRanker.blend(heuristicScore, learnedScore);
                 }
+
+                // Minecraft context energy bias (Phase 6)
+                boolean contextEnabled = (plugin != null && plugin.getConfig() != null)
+                        && plugin.getConfig().getBoolean("recommendations.context.enabled", false);
+                double contextWeight = (plugin != null && plugin.getConfig() != null)
+                        ? Math.min(0.10, plugin.getConfig().getDouble("recommendations.context.weight", 0.08)) : 0.08;
+
+                Double candidateEnergy = null;
+                if (contextEnabled && plugin != null && plugin.cache() != null) {
+                    TrackCache.TrackFeatures tf = plugin.cache().getTrackFeatures(ev.candidate.track().id());
+                    if (tf != null && tf.energy() != null) {
+                        candidateEnergy = tf.energy();
+                    } else if (genreResolver != null && ev.candidate.track().artist() != null) {
+                        List<String> cGenres = genreResolver.getCachedGenres(ev.candidate.track().artist());
+                        if (cGenres != null && !cGenres.isEmpty()) {
+                            candidateEnergy = estimateEnergyFromGenre(cGenres);
+                        }
+                    }
+                }
+
+                Double contextMatch = null;
+                if (contextEnabled && contextSnapshot != null && candidateEnergy != null) {
+                    contextMatch = Math.max(0.0, 1.0 - Math.abs(candidateEnergy - contextSnapshot.targetEnergy()));
+                    finalScore = (finalScore * (1.0 - contextWeight)) + (contextMatch * contextWeight);
+                }
+
+                feat.put("contextMatch", contextMatch);
+                feat.put("candidateEnergy", candidateEnergy);
+                feat.put("targetEnergy", contextSnapshot != null ? contextSnapshot.targetEnergy() : null);
 
                 candidateLearnedScoresMap.put(ev.candidate.track().id(), learnedScore);
                 candidateHeuristicScoresMap.put(ev.candidate.track().id(), heuristicScore);

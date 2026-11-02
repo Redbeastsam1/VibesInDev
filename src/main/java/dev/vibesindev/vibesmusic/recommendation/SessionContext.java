@@ -30,6 +30,15 @@ public final class SessionContext {
     private final Deque<CompletedTrack> completedTracks = new ArrayDeque<>();
     private final Map<String, Double> genreCentroid = new HashMap<>();
     private Random random = new Random();
+    private MinecraftContextSampler.ContextSnapshot minecraftContext;
+
+    public void setMinecraftContext(MinecraftContextSampler.ContextSnapshot context) {
+        this.minecraftContext = context;
+    }
+
+    public MinecraftContextSampler.ContextSnapshot getMinecraftContext() {
+        return minecraftContext;
+    }
 
     public void setRandom(Random random) {
         this.random = (random != null) ? random : new Random();

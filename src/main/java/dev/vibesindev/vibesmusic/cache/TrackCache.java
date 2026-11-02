@@ -180,6 +180,14 @@ public final class TrackCache {
                     "source TEXT NOT NULL, " +
                     "fetched_at INTEGER NOT NULL" +
                     ")");
+            stmt.execute("CREATE TABLE IF NOT EXISTS track_features (" +
+                    "track_id TEXT PRIMARY KEY, " +
+                    "loudness REAL, " +
+                    "dynamic_range REAL, " +
+                    "bpm REAL, " +
+                    "energy REAL, " +
+                    "computed_at INTEGER" +
+                    ")");
             stmt.execute("CREATE TABLE IF NOT EXISTS rec_impressions (" +
                     "impression_id TEXT PRIMARY KEY, " +
                     "ts INTEGER NOT NULL, " +
@@ -867,6 +875,53 @@ public final class TrackCache {
             plugin.getLogger().warning("[VibesInDev] Error querying trending tracks: " + e.getMessage());
         }
         return result;
+    }
+
+    public record TrackFeatures(Double loudness, Double dynamicRange, Double bpm, Double energy, long computedAt) {}
+
+    public void saveTrackFeatures(String trackId, Double loudness, Double dynamicRange, Double bpm, Double energy) {
+        if (trackId == null || trackId.isBlank()) return;
+        long now = System.currentTimeMillis();
+        String sql = "INSERT INTO track_features (track_id, loudness, dynamic_range, bpm, energy, computed_at) " +
+                     "VALUES (?, ?, ?, ?, ?, ?) " +
+                     "ON CONFLICT(track_id) DO UPDATE SET " +
+                     "loudness = excluded.loudness, " +
+                     "dynamic_range = excluded.dynamic_range, " +
+                     "bpm = excluded.bpm, " +
+                     "energy = excluded.energy, " +
+                     "computed_at = excluded.computed_at;";
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, trackId);
+            if (loudness != null) ps.setDouble(2, loudness); else ps.setNull(2, java.sql.Types.REAL);
+            if (dynamicRange != null) ps.setDouble(3, dynamicRange); else ps.setNull(3, java.sql.Types.REAL);
+            if (bpm != null) ps.setDouble(4, bpm); else ps.setNull(4, java.sql.Types.REAL);
+            if (energy != null) ps.setDouble(5, energy); else ps.setNull(5, java.sql.Types.REAL);
+            ps.setLong(6, now);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            plugin.getLogger().warning("[VibesInDev] Error saving track features: " + e.getMessage());
+        }
+    }
+
+    public TrackFeatures getTrackFeatures(String trackId) {
+        if (trackId == null || trackId.isBlank()) return null;
+        String sql = "SELECT loudness, dynamic_range, bpm, energy, computed_at FROM track_features WHERE track_id = ?";
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, trackId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    Double loudness = rs.getObject("loudness") != null ? rs.getDouble("loudness") : null;
+                    Double dynamicRange = rs.getObject("dynamic_range") != null ? rs.getDouble("dynamic_range") : null;
+                    Double bpm = rs.getObject("bpm") != null ? rs.getDouble("bpm") : null;
+                    Double energy = rs.getObject("energy") != null ? rs.getDouble("energy") : null;
+                    long computedAt = rs.getLong("computed_at");
+                    return new TrackFeatures(loudness, dynamicRange, bpm, energy, computedAt);
+                }
+            }
+        } catch (SQLException e) {
+            plugin.getLogger().warning("[VibesInDev] Error querying track features: " + e.getMessage());
+        }
+        return null;
     }
 
     // =======================================================

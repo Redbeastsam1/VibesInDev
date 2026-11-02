@@ -103,6 +103,35 @@ recommendations:
   engine-v2-rollout-percent: 0
   genre-sample-temperature: 1.0
   per-genre-limit: 12
+  # Mode distribution and per-mode ranking weights (Task 2.5)
+  modes:
+    familiar: 0.30
+    similar: 0.50
+    explore: 0.20
+  mode-weights:
+    familiar:
+      genre: 0.10
+      artist: 0.25
+      continuity: 0.15
+      familiarity: 0.40
+      quality: 0.10
+      novelty: 0.00
+    similar:
+      genre: 0.30
+      artist: 0.20
+      continuity: 0.25
+      familiarity: 0.05
+      quality: 0.10
+      novelty: 0.10
+    explore:
+      genre: 0.20
+      artist: 0.05
+      continuity: 0.25
+      familiarity: 0.00
+      quality: 0.15
+      novelty: 0.35
+  explore-min-continuity: 0.45
+  min-feature-coverage: 0.35
   # External metadata enrichment (optional)
   external:
     lastfm-api-key: ""

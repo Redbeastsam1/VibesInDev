@@ -582,6 +582,129 @@ public final class RecommendationEngine {
         return scoreAndPickBestLegacy(candidates, seed, profile);
     }
 
+    public static RecommendationMode sampleMode(double familiarProb, double similarProb, double exploreProb, boolean allowExplore, Random random) {
+        Random rng = (random != null) ? random : RANDOM;
+        double f = Math.max(0.0, familiarProb);
+        double s = Math.max(0.0, similarProb);
+        double e = allowExplore ? Math.max(0.0, exploreProb) : 0.0;
+        double total = f + s + e;
+        if (total <= 0.0) {
+            return RecommendationMode.SIMILAR;
+        }
+        double r = rng.nextDouble() * total;
+        if (r < f) {
+            return RecommendationMode.FAMILIAR;
+        } else if (r < f + s) {
+            return RecommendationMode.SIMILAR;
+        } else {
+            return RecommendationMode.EXPLORE;
+        }
+    }
+
+    public static double[] getModeWeights(RecommendationMode mode, org.bukkit.configuration.file.FileConfiguration config) {
+        if (config != null) {
+            String prefix = "recommendations.mode-weights." + mode.name().toLowerCase(Locale.ROOT) + ".";
+            double g = config.getDouble(prefix + "genre", -1.0);
+            if (g >= 0.0) {
+                return new double[] {
+                        g,
+                        config.getDouble(prefix + "artist", 0.20),
+                        config.getDouble(prefix + "continuity", 0.25),
+                        config.getDouble(prefix + "familiarity", 0.05),
+                        config.getDouble(prefix + "quality", 0.10),
+                        config.getDouble(prefix + "novelty", 0.10)
+                };
+            }
+        }
+        return switch (mode) {
+            case FAMILIAR -> new double[] { 0.10, 0.25, 0.15, 0.40, 0.10, 0.00 };
+            case SIMILAR -> new double[] { 0.30, 0.20, 0.25, 0.05, 0.10, 0.10 };
+            case EXPLORE -> new double[] { 0.20, 0.05, 0.25, 0.00, 0.15, 0.35 };
+        };
+    }
+
+    public static double calculateCandidateScore(
+            double genreCosine, boolean hasGenre,
+            double artistAffinity,
+            double continuity,
+            double familiarity,
+            double quality,
+            double novelty,
+            double[] weights,
+            double minFeatureCoverage,
+            double monopolyMultiplier,
+            boolean cachedLocally,
+            double cacheBonus
+    ) {
+        if (weights == null || weights.length < 6) {
+            weights = new double[] { 0.30, 0.20, 0.25, 0.05, 0.10, 0.10 };
+        }
+
+        double availableWeight = 0.0;
+        double weightedSum = 0.0;
+        int availableCount = 0;
+
+        if (hasGenre && weights[0] > 0.0) {
+            availableWeight += weights[0];
+            weightedSum += weights[0] * Math.max(0.0, Math.min(1.0, genreCosine));
+            availableCount++;
+        }
+        if (weights[1] > 0.0) {
+            availableWeight += weights[1];
+            weightedSum += weights[1] * Math.max(0.0, Math.min(1.0, artistAffinity));
+            availableCount++;
+        }
+        if (weights[2] > 0.0) {
+            availableWeight += weights[2];
+            weightedSum += weights[2] * Math.max(0.0, Math.min(1.0, continuity));
+            availableCount++;
+        }
+        if (weights[3] > 0.0) {
+            availableWeight += weights[3];
+            weightedSum += weights[3] * Math.max(0.0, Math.min(1.0, familiarity));
+            availableCount++;
+        }
+        if (weights[4] > 0.0) {
+            availableWeight += weights[4];
+            weightedSum += weights[4] * Math.max(0.0, Math.min(1.0, quality));
+            availableCount++;
+        }
+        if (weights[5] > 0.0) {
+            availableWeight += weights[5];
+            weightedSum += weights[5] * Math.max(0.0, Math.min(1.0, novelty));
+            availableCount++;
+        }
+
+        double totalConfiguredWeight = weights[0] + weights[1] + weights[2] + weights[3] + weights[4] + weights[5];
+        if (totalConfiguredWeight <= 0.0) totalConfiguredWeight = 1.0;
+        double featureCoverage = availableWeight / totalConfiguredWeight;
+
+        if (availableCount < 2 || featureCoverage < minFeatureCoverage) {
+            return -1.0; // INSUFFICIENT_FEATURES
+        }
+
+        double baseScore = availableWeight > 0.0 ? (weightedSum / availableWeight) : 0.0;
+        double confidence = 0.85 + (0.15 * featureCoverage);
+        double score = baseScore * confidence;
+        score *= monopolyMultiplier;
+        if (cachedLocally) {
+            score += cacheBonus;
+        }
+        return score;
+    }
+
+    private record CandidateEvaluation(
+            RecommendationCandidate candidate,
+            double genreCosine,
+            boolean hasGenre,
+            double artistAffinity,
+            double continuity,
+            double familiarity,
+            double quality,
+            double novelty,
+            double monopolyMultiplier
+    ) {}
+
     Track scoreAndPickBestV2(
             List<RecommendationCandidate> candidates,
             Track seed,
@@ -606,12 +729,24 @@ public final class RecommendationEngine {
         long cooldownMs = (plugin != null && plugin.getConfig() != null ? plugin.getConfig().getLong("recommendations.cooldown-minutes", 45) : 45) * 60_000L;
         long minDur = plugin != null && plugin.getConfig() != null ? plugin.getConfig().getLong("recommendations.min-duration-seconds", 60) : 60;
         long maxDur = plugin != null && plugin.getConfig() != null ? plugin.getConfig().getLong("recommendations.max-duration-seconds", 600) : 600;
-        double explorationRatio = plugin != null && plugin.getConfig() != null ? plugin.getConfig().getDouble("recommendations.exploration-ratio", 0.20) : 0.20;
-        double cacheBonusValue = plugin != null && plugin.getConfig() != null ? plugin.getConfig().getDouble("recommendations.cache-bonus", 0.05) : 0.05;
+        double cacheBonusValue = plugin != null && plugin.getConfig() != null ? plugin.getConfig().getDouble("recommendations.cache-bonus", 0.02) : 0.02;
+        double exploreMinContinuity = plugin != null && plugin.getConfig() != null ? plugin.getConfig().getDouble("recommendations.explore-min-continuity", 0.45) : 0.45;
+        double minFeatureCoverage = plugin != null && plugin.getConfig() != null ? plugin.getConfig().getDouble("recommendations.min-feature-coverage", 0.35) : 0.35;
 
-        boolean explore = RANDOM.nextDouble() < explorationRatio;
+        // Sample mode
+        double wFam = plugin != null && plugin.getConfig() != null ? plugin.getConfig().getDouble("recommendations.modes.familiar", 0.30) : 0.30;
+        double wSim = plugin != null && plugin.getConfig() != null ? plugin.getConfig().getDouble("recommendations.modes.similar", 0.50) : 0.50;
+        double wExp = plugin != null && plugin.getConfig() != null ? plugin.getConfig().getDouble("recommendations.modes.explore", 0.20) : 0.20;
 
-        List<RecommendationCandidate> scored = new ArrayList<>();
+        int sessionTracks = profile != null ? profile.getFatigueHistory().size() : 0;
+        boolean allowExplore = sessionTracks >= 3;
+        RecommendationMode requestedMode = sampleMode(wFam, wSim, wExp, allowExplore, RANDOM);
+        RecommendationMode effectiveMode = requestedMode;
+
+        List<CandidateEvaluation> eligible = new ArrayList<>();
+        List<CandidateEvaluation> familiarPool = new ArrayList<>();
+        List<CandidateEvaluation> similarPool = new ArrayList<>();
+        List<CandidateEvaluation> explorePool = new ArrayList<>();
         Set<String> seenIds = new HashSet<>();
 
         for (RecommendationCandidate c : candidates) {
@@ -620,7 +755,7 @@ public final class RecommendationEngine {
             if (seenIds.contains(t.id())) continue;
             seenIds.add(t.id());
 
-            // 0. STRICT SEED DUPLICATE FILTER: Never recommend the seed track or its remixes/slowed versions
+            // 0. STRICT SEED DUPLICATE FILTER
             if (seed != null && PlayerTasteProfile.isSameSongOrRemix(t, seed)) {
                 continue;
             }
@@ -628,59 +763,117 @@ public final class RecommendationEngine {
             // 1. Duration guardrails
             if (t.durationSeconds() > 0) {
                 if (t.durationSeconds() < minDur || t.durationSeconds() > maxDur) {
-                    continue; // Discard meme clips or multi-hour mixes
+                    continue;
                 }
             }
 
-            // 2. Strict fatigue check (never repeat tracks or duplicate songs heard in last 20 songs or 45 min)
+            // 2. Strict fatigue check
             if (profile != null && profile.isFatigued(t, cooldownTracks, cooldownMs)) {
                 continue;
             }
 
-            // 3. Artist affinity score (0.0 to 1.0)
+            // 3. Artist affinity
             double artistAffinity = profile != null ? profile.getArtistAffinity(t.artist()) : 0.2;
 
-            // 4. Vibe continuity (keeps playback in a consistent Daily Mix cluster)
-            double continuity = 0.5;
+            // 4. Vibe continuity
+            double continuity = 0.40;
             if (seed != null) {
                 if (ArtistNames.sameArtist(seed.artist(), t.artist())) {
                     continuity = 0.85;
                 } else if (c.source() == RecommendationCandidate.Source.YOUTUBE_RADIO) {
-                    continuity = 0.75; // YouTube RD algorithm already clustered it with seed
+                    continuity = 0.75;
+                } else if (c.source() == RecommendationCandidate.Source.SERVER_COLLABORATIVE) {
+                    continuity = 0.70;
                 }
             }
 
-            // 5. Real Genre Similarity (fixes F6, F15)
-            // Stream-based priors removed! Candidates from all streams earn genre score via real similarity.
+            // 5. Genre similarity
             List<String> candidateGenres = (genreResolver != null && t.artist() != null)
                     ? genreResolver.getCachedGenres(t.artist()) : Collections.emptyList();
-            double genreCosine = (profile != null)
+            boolean hasGenre = !candidateGenres.isEmpty();
+            double genreCosine = (profile != null && hasGenre)
                     ? profile.calculateGenreCosineSimilarity(candidateGenres) : -1.0;
-            // Missing feature is neutral (0.20), real match uses cosine similarity [0.0, 1.0]
-            double genreMatch = (genreCosine >= 0.0) ? genreCosine : 0.20;
+            if (genreCosine < 0.0) hasGenre = false;
 
-            // 6. Discovery exploration bonus
-            double discovery = (explore && artistAffinity < 0.2) ? 0.8 : 0.1;
-
-            // 7. Base Multi-Objective Score
-            double score = (0.35 * genreMatch)
-                    + (0.30 * artistAffinity)
-                    + (0.20 * continuity)
-                    + (0.15 * discovery);
-
-            // 8. Monopoly vs continuity: graded multiplier over occurrences in last 4 plays
-            if (profile != null) {
-                int occurrences = profile.getRecentArtistCount(t.artist());
-                double monopolyMultiplier = getMonopolyMultiplier(occurrences);
-                score *= monopolyMultiplier;
+            // 6. Familiarity feature
+            double familiarity = 0.0;
+            if (c.source() == RecommendationCandidate.Source.FAMILIAR) {
+                familiarity = 1.0;
+            } else if (artistAffinity >= 0.5) {
+                familiarity = 0.70;
+            } else if (genreCosine >= 0.2) {
+                familiarity = 0.40;
             }
 
-            // 9. Cache bonus (already downloaded OGG saves download time)
-            if (c.cachedLocally()) {
-                score += cacheBonusValue;
-            }
+            // 7. Quality
+            double quality = 1.0;
 
-            scored.add(new RecommendationCandidate(t, score, c.source(), c.reason(), c.cachedLocally()));
+            // 8. Novelty
+            double novelty = Math.max(0.0, Math.min(1.0, 1.0 - Math.max(familiarity, artistAffinity)));
+
+            // 9. Monopoly multiplier
+            int occurrences = profile != null ? profile.getRecentArtistCount(t.artist()) : 0;
+            double monopolyMultiplier = getMonopolyMultiplier(occurrences);
+
+            CandidateEvaluation eval = new CandidateEvaluation(
+                    c, genreCosine, hasGenre, artistAffinity, continuity, familiarity, quality, novelty, monopolyMultiplier
+            );
+            eligible.add(eval);
+
+            if (c.source() == RecommendationCandidate.Source.FAMILIAR) {
+                familiarPool.add(eval);
+            }
+            if (artistAffinity >= 0.2 || (hasGenre && genreCosine >= 0.4)
+                    || c.source() == RecommendationCandidate.Source.SPOTIFY_GENRE
+                    || c.source() == RecommendationCandidate.Source.YOUTUBE_RADIO
+                    || c.source() == RecommendationCandidate.Source.SERVER_COLLABORATIVE) {
+                similarPool.add(eval);
+            }
+            if (artistAffinity < 0.2 && continuity >= exploreMinContinuity
+                    && (profile == null || !profile.isRecentArtist(t.artist()))) {
+                explorePool.add(eval);
+            }
+        }
+
+        if (eligible.isEmpty()) {
+            return null;
+        }
+
+        // Select mode pool with fallbacks
+        List<CandidateEvaluation> activePool;
+        if (effectiveMode == RecommendationMode.FAMILIAR) {
+            if (!familiarPool.isEmpty()) {
+                activePool = familiarPool;
+            } else {
+                effectiveMode = RecommendationMode.SIMILAR;
+                activePool = !similarPool.isEmpty() ? similarPool : eligible;
+            }
+        } else if (effectiveMode == RecommendationMode.EXPLORE) {
+            if (!explorePool.isEmpty()) {
+                activePool = explorePool;
+            } else {
+                effectiveMode = RecommendationMode.SIMILAR;
+                activePool = !similarPool.isEmpty() ? similarPool : eligible;
+            }
+        } else {
+            activePool = !similarPool.isEmpty() ? similarPool : eligible;
+        }
+
+        double[] weights = getModeWeights(effectiveMode, plugin != null ? plugin.getConfig() : null);
+
+        List<RecommendationCandidate> scored = new ArrayList<>();
+        for (CandidateEvaluation ev : activePool) {
+            double score = calculateCandidateScore(
+                    ev.genreCosine, ev.hasGenre,
+                    ev.artistAffinity, ev.continuity, ev.familiarity, ev.quality, ev.novelty,
+                    weights, minFeatureCoverage, ev.monopolyMultiplier, ev.candidate.cachedLocally(), cacheBonusValue
+            );
+            if (score >= 0.0) {
+                scored.add(new RecommendationCandidate(
+                        ev.candidate.track(), score, ev.candidate.source(),
+                        ev.candidate.reason() + " [" + effectiveMode.name() + "]", ev.candidate.cachedLocally()
+                ));
+            }
         }
 
         if (scored.isEmpty()) {

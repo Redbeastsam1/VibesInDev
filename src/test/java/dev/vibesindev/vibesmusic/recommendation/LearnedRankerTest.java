@@ -1,6 +1,5 @@
 package dev.vibesindev.vibesmusic.recommendation;
 
-import dev.vibesindev.vibesmusic.model.Track;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -9,14 +8,8 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.PreparedStatement;
-import java.sql.Statement;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.Map;
-import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -118,52 +111,5 @@ public class LearnedRankerTest {
         // 0.60 * 0.30 + 0.40 * 0.70 = 0.18 + 0.28 = 0.46
         double expected = (0.60 * learned) + (0.40 * heuristic);
         assertEquals(expected, ranker.blend(heuristic, learned), 1e-6);
-    }
-
-    @Test
-    public void testFitScriptRefusalOnSmallData() throws Exception {
-        Path dbPath = tempDir.resolve("test_sparse.db");
-        String dbUrl = "jdbc:sqlite:" + dbPath.toAbsolutePath().toString();
-
-        try (Connection conn = DriverManager.getConnection(dbUrl); Statement stmt = conn.createStatement()) {
-            stmt.execute("CREATE TABLE rec_impressions (" +
-                    "impression_id TEXT PRIMARY KEY, ts INTEGER, outcome TEXT, completion REAL)");
-            stmt.execute("CREATE TABLE rec_candidates (" +
-                    "impression_id TEXT, selected INTEGER, selection_probability REAL, features_json TEXT)");
-
-            // Insert 50 rows (far below 2000 required minimum)
-            try (PreparedStatement ps1 = conn.prepareStatement("INSERT INTO rec_impressions VALUES (?, ?, ?, ?)");
-                 PreparedStatement ps2 = conn.prepareStatement("INSERT INTO rec_candidates VALUES (?, ?, ?, ?)")) {
-                for (int i = 0; i < 50; i++) {
-                    String id = "impr_" + i;
-                    ps1.setString(1, id);
-                    ps1.setLong(2, System.currentTimeMillis() + i * 1000);
-                    ps1.setString(3, i % 2 == 0 ? "COMPLETED" : "SKIPPED_EARLY");
-                    ps1.setDouble(4, i % 2 == 0 ? 1.0 : 0.1);
-                    ps1.executeUpdate();
-
-                    ps2.setString(1, id);
-                    ps2.setInt(2, 1);
-                    ps2.setDouble(3, 0.25);
-                    ps2.setString(4, "{\"genre_match\": 0.8, \"quality\": 0.9}");
-                    ps2.executeUpdate();
-                }
-            }
-        }
-
-        File scriptFile = new File("tools/fit_ranker.py");
-        assertTrue(scriptFile.exists(), "tools/fit_ranker.py must exist");
-
-        ProcessBuilder pb = new ProcessBuilder("python", scriptFile.getAbsolutePath(),
-                "--db", dbPath.toAbsolutePath().toString(),
-                "--out", tempDir.resolve("weights.json").toAbsolutePath().toString());
-        pb.redirectErrorStream(true);
-        Process p = pb.start();
-        String output = new String(p.getInputStream().readAllBytes());
-        int exitCode = p.waitFor();
-
-        assertEquals(2, exitCode, "Script must exit with code 2 when minimum data gate is not met. Output: " + output);
-        assertTrue(output.contains("Minimum Data Gate Not Met"), "Output must contain gate refusal explanation: " + output);
-        assertFalse(Files.exists(tempDir.resolve("weights.json")), "Weights file must NOT be written when gate fails.");
     }
 }

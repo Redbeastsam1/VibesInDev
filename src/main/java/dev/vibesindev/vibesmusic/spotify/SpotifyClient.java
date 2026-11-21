@@ -413,9 +413,7 @@ public final class SpotifyClient {
 
       URI redirect = URI.create(redirectUri);
 
-      String nonce = randomUrlSafe(32);
-
-      String state = nonce + "_" + (player != null ? player.getUniqueId().toString() : "host");
+      String state = randomUrlSafe(8);
 
       // Cache state for anti-CSRF validation (valid for 10 minutes)
 

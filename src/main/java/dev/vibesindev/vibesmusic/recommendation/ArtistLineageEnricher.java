@@ -30,7 +30,7 @@ public class ArtistLineageEnricher {
     private final HttpClient httpClient;
     private final ExecutorService executor;
 
-    private static final String USER_AGENT = "VibesInDev/0.9.0 ( https://github.com/VibesInDev )";
+    private static final String USER_AGENT = "VibesInDev/1.0.0 ( https://github.com/VibesInDev )";
     private final AtomicLong lastMusicBrainzRequest = new AtomicLong(0);
     private static final long MUSICBRAINZ_RATE_LIMIT_MS = 1000L;
 

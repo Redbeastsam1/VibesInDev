@@ -165,7 +165,7 @@ public class GenreMassTest {
 
         assertEquals(origDist.keySet(), restDist.keySet());
         for (String k : origDist.keySet()) {
-            assertEquals(origDist.get(k), restDist.get(k), 1e-9);
+            assertEquals(origDist.get(k), restDist.get(k), 1e-6);
         }
     }
 

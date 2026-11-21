@@ -22,6 +22,7 @@ import java.util.concurrent.ThreadFactory;
 
 import dev.vibesindev.vibesmusic.client.network.MusicNetwork;
 
+@SuppressWarnings("null")
 public final class MusicAudioPlayer {
 
     public static final Identifier STREAM_SOUND_ID =
@@ -674,13 +675,12 @@ public final class MusicAudioPlayer {
 
     private static final class StreamingSoundInstance
             extends AbstractSoundInstance
-            implements FabricSoundInstance, TickableSoundInstance {
+            implements TickableSoundInstance {
 
         private final boolean resume;
         private final long initialSeekMs;
         private volatile long bytesPerSecond;
         private volatile PositionTrackingAudioStream trackingStream;
-        private int tickCount = 0;
 
         public boolean isPlaybackCompleted() {
             PositionTrackingAudioStream stream = trackingStream;

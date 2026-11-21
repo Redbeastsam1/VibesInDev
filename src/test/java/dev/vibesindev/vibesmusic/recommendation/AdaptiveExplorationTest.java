@@ -1,8 +1,5 @@
 package dev.vibesindev.vibesmusic.recommendation;
 
-import dev.vibesindev.vibesmusic.VibesInDevPlugin;
-import dev.vibesindev.vibesmusic.cache.TrackCache;
-import dev.vibesindev.vibesmusic.model.Track;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -17,13 +14,13 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.Comparator;
-import java.util.List;
 import java.util.Random;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
+@SuppressWarnings("null")
 public class AdaptiveExplorationTest {
 
     private Path tempDir;

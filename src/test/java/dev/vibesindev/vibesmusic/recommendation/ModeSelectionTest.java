@@ -1,13 +1,12 @@
 package dev.vibesindev.vibesmusic.recommendation;
 
-import dev.vibesindev.vibesmusic.model.Track;
 import org.junit.jupiter.api.Test;
 
-import java.util.List;
 import java.util.Random;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+@SuppressWarnings("null")
 public class ModeSelectionTest {
 
     @Test
@@ -74,8 +73,6 @@ public class ModeSelectionTest {
 
     @Test
     public void testInsufficientFeatureCoverageRejectsCandidate() {
-        double[] similarWeights = RecommendationEngine.getModeWeights(RecommendationMode.SIMILAR, null);
-
         // Candidate with only 1 feature (e.g. only quality available, all else weight=0 or unavailable)
         double[] strictWeights = new double[] { 0.80, 0.0, 0.0, 0.0, 0.20, 0.0 };
 

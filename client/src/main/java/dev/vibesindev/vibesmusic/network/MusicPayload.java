@@ -5,6 +5,7 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.Identifier;
 
+@SuppressWarnings("null")
 public record MusicPayload(byte[] data) implements CustomPacketPayload {
 
     public static final Identifier ID =

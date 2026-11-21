@@ -26,6 +26,7 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class MinecraftContextSampler implements Listener {
 
+    @SuppressWarnings("unused")
     private final VibesInDevPlugin plugin;
     private final Map<UUID, Long> lastCombatTimes = new ConcurrentHashMap<>();
 
@@ -45,6 +46,10 @@ public final class MinecraftContextSampler implements Listener {
 
     public MinecraftContextSampler(VibesInDevPlugin plugin) {
         this.plugin = plugin;
+    }
+
+    public VibesInDevPlugin getPlugin() {
+        return plugin;
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)

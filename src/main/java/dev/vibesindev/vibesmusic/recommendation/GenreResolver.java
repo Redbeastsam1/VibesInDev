@@ -8,7 +8,6 @@ import dev.vibesindev.vibesmusic.VibesInDevPlugin;
 import dev.vibesindev.vibesmusic.cache.TrackCache;
 import dev.vibesindev.vibesmusic.spotify.SpotifyHttp;
 
-import java.io.InputStream;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -19,7 +18,6 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;

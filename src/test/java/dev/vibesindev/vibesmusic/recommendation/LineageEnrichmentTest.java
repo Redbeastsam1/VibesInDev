@@ -14,6 +14,7 @@ import java.util.concurrent.CompletableFuture;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+@SuppressWarnings("null")
 public class LineageEnrichmentTest {
 
     @BeforeEach

@@ -14,6 +14,7 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 import java.util.UUID;
 
+@SuppressWarnings("null")
 public final class MusicNetwork {
 
     private static final byte OP_HELLO = 1;
@@ -568,7 +569,7 @@ public final class MusicNetwork {
             String owner = new String(ownerBytes, java.nio.charset.StandardCharsets.UTF_8);
 
             System.out.println("[VibesInDev] Active party music found on reconnect! Resuming: "
-                    + title + " - " + artist + " at " + positionMs + "ms");
+                    + title + " - " + artist + " (owner: " + owner + ", duration: " + durationSeconds + "s) at " + positionMs + "ms");
 
         } else {
             System.out.println("[VibesInDev] No active party music on reconnect.");

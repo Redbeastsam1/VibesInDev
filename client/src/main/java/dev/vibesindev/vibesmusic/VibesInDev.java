@@ -13,6 +13,7 @@ import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+@SuppressWarnings("null")
 public class VibesInDev implements ModInitializer {
 	public static final String MOD_ID = "vibesindev";
 

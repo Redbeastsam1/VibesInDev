@@ -1,7 +1,5 @@
 package dev.vibesindev.vibesmusic.recommendation;
 
-import dev.vibesindev.vibesmusic.cache.TrackCache;
-import dev.vibesindev.vibesmusic.cache.TrackCache.CandidateTelemetry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -15,12 +13,11 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.Comparator;
-import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+@SuppressWarnings("null")
 public class TelemetryTest {
 
     private Path tempDir;

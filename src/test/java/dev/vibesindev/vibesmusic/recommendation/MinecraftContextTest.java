@@ -1,11 +1,5 @@
 package dev.vibesindev.vibesmusic.recommendation;
 
-import dev.vibesindev.vibesmusic.cache.TrackCache;
-import dev.vibesindev.vibesmusic.model.Track;
-import org.bukkit.World;
-import org.bukkit.block.Block;
-import org.bukkit.configuration.file.YamlConfiguration;
-import org.bukkit.entity.Player;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -25,6 +19,7 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
+@SuppressWarnings("null")
 public class MinecraftContextTest {
 
     private Path tempDir;

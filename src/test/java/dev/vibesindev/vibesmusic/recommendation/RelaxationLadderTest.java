@@ -19,6 +19,7 @@ import java.util.concurrent.TimeUnit;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
+@SuppressWarnings("null")
 public class RelaxationLadderTest {
 
     private VibesInDevPlugin plugin;

@@ -4,13 +4,13 @@ import dev.vibesindev.vibesmusic.model.Track;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+@SuppressWarnings("null")
 public class BlendTest {
 
     private Track makeTrack(String id, String title, String artist) {

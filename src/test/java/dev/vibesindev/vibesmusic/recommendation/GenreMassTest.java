@@ -11,7 +11,7 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-@SuppressWarnings("deprecation")
+@SuppressWarnings({"deprecation", "null"})
 public class GenreMassTest {
 
     @Test

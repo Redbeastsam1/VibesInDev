@@ -1,7 +1,5 @@
 package dev.vibesindev.vibesmusic.recommendation;
 
-import dev.vibesindev.vibesmusic.model.Track;
-import dev.vibesindev.vibesmusic.spotify.SpotifyClient;
 import dev.vibesindev.vibesmusic.spotify.SpotifyHttp;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -15,6 +13,7 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+@SuppressWarnings("null")
 public class StreamBSamplingTest {
 
     @Test

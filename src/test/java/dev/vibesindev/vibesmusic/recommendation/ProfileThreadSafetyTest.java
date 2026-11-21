@@ -4,14 +4,13 @@ import dev.vibesindev.vibesmusic.model.Track;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+@SuppressWarnings("null")
 public class ProfileThreadSafetyTest {
 
     private Track makeTrack(String id, String title, String artist) {

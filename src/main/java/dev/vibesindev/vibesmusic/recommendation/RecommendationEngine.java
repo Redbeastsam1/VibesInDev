@@ -282,9 +282,7 @@ public final class RecommendationEngine {
     /**
      * Stream C: Fetches YouTube Radio Mix candidates (RD{id}) via flat-playlist.
      */
-    private CompletableFuture<List<RecommendationCandidate>> fetchYouTubeRadioCandidates(Track seed) {
-        return fetchYouTubeRadioCandidates(seed, null);
-    }
+
 
     private CompletableFuture<List<RecommendationCandidate>> fetchYouTubeRadioCandidates(Track seed, SessionContext sessionContext) {
         Track radioSeed = (sessionContext != null) ? sessionContext.getStreamCSeed(seed) : seed;
@@ -1138,11 +1136,7 @@ public final class RecommendationEngine {
         boolean allowExplore = sessionTracks >= 3;
         RecommendationMode requestedMode = sampleMode(wFam, wSim, wExp, allowExplore, rng);
         RecommendationMode effectiveMode = requestedMode;
-        double modeProb = switch (requestedMode) {
-            case FAMILIAR -> wFam;
-            case EXPLORE -> allowExplore ? wExp : 0.0;
-            default -> wSim;
-        };
+
 
         Set<String> likedKeys = new HashSet<>();
         Set<String> spotifyKeys = new HashSet<>();

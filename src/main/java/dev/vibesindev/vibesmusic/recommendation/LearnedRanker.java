@@ -1,6 +1,5 @@
 package dev.vibesindev.vibesmusic.recommendation;
 
-import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 

@@ -18,6 +18,7 @@ import java.util.Set;
  * In-memory, non-persisted session context tracking the last completed tracks,
  * an exponentially decayed genre centroid (0.7 per track), and continuity calculation.
  */
+@SuppressWarnings("null")
 public final class SessionContext {
 
     public record CompletedTrack(

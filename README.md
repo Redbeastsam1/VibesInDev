@@ -8,7 +8,6 @@ This repository is structured as a unified monorepo containing both the server p
 
 - **Root (`/`)**: Spigot/Paper server plugin source code, built with Maven (`./mvnw clean package`).
 - **[`client/`](client/)**: Fabric client companion mod, built with Gradle (`./gradlew build`). Formatted for direct upload to Modrinth.
-- **[`tools/`](tools/)**: Offline recommendation ranker training utilities (`fit_ranker.py`).
 
 ## Current Server-Side Architecture
 
@@ -90,7 +89,7 @@ When a player's or party's queue runs empty, continuous autoplay keeps music pla
 
 ### Telemetry & Privacy Policy
 VibesInDev logs candidate-level feature vectors and listening outcomes strictly to local SQLite tables (`rec_impressions` and `rec_candidates`):
-- **Purpose**: Powers explainability (`/music why`), admin diagnostics (`/music rec stats`), and offline ranker fitting (`tools/fit_ranker.py`).
+- **Purpose**: Powers explainability (`/music why`) and admin diagnostics (`/music rec stats`).
 - **Privacy**: All telemetry remains strictly local to the server database. No listening habits, usernames, or telemetry vectors are transmitted to external services.
 - **Retention**: Records older than 30 days are automatically pruned at startup and during daily maintenance.
 

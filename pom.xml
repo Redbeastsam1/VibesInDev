@@ -78,6 +78,11 @@
                 <version>3.14.1</version>
                 <configuration>
                     <release>25</release>
+                    <showWarnings>true</showWarnings>
+                    <showDeprecation>true</showDeprecation>
+                    <compilerArgs>
+                        <arg>-Xlint:all</arg>
+                    </compilerArgs>
                 </configuration>
             </plugin>
             <plugin>

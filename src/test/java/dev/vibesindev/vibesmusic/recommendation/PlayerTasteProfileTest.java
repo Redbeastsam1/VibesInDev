@@ -1,36 +1,24 @@
 package dev.vibesindev.vibesmusic.recommendation;
 
-
-
 import dev.vibesindev.vibesmusic.model.Track;
 
 import org.junit.jupiter.api.BeforeEach;
 
 import org.junit.jupiter.api.Test;
 
-
-
 import java.util.Collections;
 import java.util.List;
 
 import java.util.UUID;
 
-
-
 import static org.junit.jupiter.api.Assertions.*;
-
-
 
 @SuppressWarnings("deprecation")
 public class PlayerTasteProfileTest {
 
-
-
     private PlayerTasteProfile profile;
 
     private UUID playerUuid;
-
-
 
     @BeforeEach
 
@@ -42,8 +30,6 @@ public class PlayerTasteProfileTest {
 
     }
 
-
-
     @Test
 
     public void testSpotifyArtistIngestionAndAffinity() {
@@ -52,11 +38,7 @@ public class PlayerTasteProfileTest {
 
         List<String> mediumTerm = List.of("The Weeknd", "Kavinsky");
 
-
-
         profile.ingestSpotifyArtists(shortTerm, mediumTerm);
-
-
 
         // Daft Punk was short term rank 1 -> high affinity
 
@@ -71,8 +53,6 @@ public class PlayerTasteProfileTest {
         assertEquals(0.0, profile.getArtistAffinity("NonExistentArtist"));
 
     }
-
-
 
     @Test
     public void testArtistMatchingTier2AndSubstringFalsePositivePrevention() {
@@ -97,11 +77,7 @@ public class PlayerTasteProfileTest {
 
         Track t2 = new Track("track_2", "Song 2", "Artist 2", 200, "url2");
 
-
-
         profile.recordPlay(t1);
-
-
 
         // Played just now -> must be fatigued
 
@@ -113,8 +89,6 @@ public class PlayerTasteProfileTest {
 
     }
 
-
-
     @Test
 
     public void testRecentArtistSoftDecay() {
@@ -123,21 +97,15 @@ public class PlayerTasteProfileTest {
 
         Track t2 = new Track("t2", "Song 2", "Justice", 180, "url2");
 
-
-
         profile.recordPlay(t1);
 
         profile.recordPlay(t2);
-
-
 
         // Both Daft Punk and Justice are in the last 2 tracks
 
         assertTrue(profile.isRecentArtist("Justice"));
 
         assertTrue(profile.isRecentArtist("Daft Punk"));
-
-
 
         // Play 4 more tracks by other artists to evict Daft Punk from the 4-track window
 
@@ -149,8 +117,6 @@ public class PlayerTasteProfileTest {
 
         profile.recordPlay(new Track("t6", "Song 6", "Gesaffelstein", 180, "url6"));
 
-
-
         // Daft Punk is no longer in the last 4
 
         assertFalse(profile.isRecentArtist("Daft Punk"));
@@ -161,15 +127,11 @@ public class PlayerTasteProfileTest {
 
     }
 
-
-
     @Test
 
     public void testFeedbackLikeAndDislike() {
 
         Track t = new Track("track_fb", "Favorite Song", "Avicii", 200, "url_fb");
-
-
 
         // Initial like boosts affinity
 
@@ -180,8 +142,6 @@ public class PlayerTasteProfileTest {
         assertTrue(likedAffinity >= 0.25, "Liked artist should have affinity >= 0.25");
 
         assertFalse(profile.isDisliked(t.id()), "Track should not be marked disliked");
-
-
 
         // Disliking track downweights artist affinity by 50% and sets 7-day soft ban
 
@@ -197,8 +157,6 @@ public class PlayerTasteProfileTest {
 
         assertTrue(profile.isFatigued(t.id(), 20, 45 * 60_000L), "Disliked track must be considered fatigued");
 
-
-
         // Liking again clears the dislike
 
         profile.recordLike(t);
@@ -206,8 +164,6 @@ public class PlayerTasteProfileTest {
         assertFalse(profile.isDisliked(t.id()), "Liking track must clear dislike soft-ban");
 
     }
-
-
 
     @Test
 
@@ -218,8 +174,6 @@ public class PlayerTasteProfileTest {
         profile.ingestSpotifyArtists(List.of("Calvin Harris"), null);
 
         double initial = profile.getArtistAffinity("Calvin Harris");
-
-
 
         // 1st early skip: artist affinity is unchanged (only track cooldown)
         profile.recordSkip(t);
@@ -234,8 +188,6 @@ public class PlayerTasteProfileTest {
 
     }
 
-
-
     @Test
 
     public void testSpotifyBlendPartyCentroid() {
@@ -243,8 +195,6 @@ public class PlayerTasteProfileTest {
         PlayerTasteProfile p1 = new PlayerTasteProfile(UUID.randomUUID());
 
         p1.ingestSpotifyArtists(List.of("Daft Punk"), null);
-
-
 
         PlayerTasteProfile p2 = new PlayerTasteProfile(UUID.randomUUID());
 
@@ -254,11 +204,7 @@ public class PlayerTasteProfileTest {
 
         p2.recordDislike(dislikedTrack);
 
-
-
         PlayerTasteProfile blend = PlayerTasteProfile.blend(List.of(p1, p2));
-
-
 
         // Both artists should be present in the blended centroid profile
 
@@ -266,14 +212,11 @@ public class PlayerTasteProfileTest {
 
         assertTrue(blend.getArtistAffinity("Skrillex") > 0.0);
 
-
-
         // Blended party profile inherits dislike from member
 
         assertTrue(blend.isDisliked(dislikedTrack.id()), "Party blend should inherit member's disliked tracks");
 
     }
-
 
     @Test
     public void testArtistLineageBandToSolo() {

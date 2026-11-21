@@ -131,12 +131,16 @@ public final class SpotifyHttp {
     }
 
     public static class FeatureDisabledException extends IllegalStateException {
+        private static final long serialVersionUID = 1L;
+
         public FeatureDisabledException(String message) {
             super(message);
         }
     }
 
     public static class RateLimitException extends IOException {
+        private static final long serialVersionUID = 1L;
+
         public RateLimitException(String message) {
             super(message);
         }

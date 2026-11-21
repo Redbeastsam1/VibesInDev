@@ -596,10 +596,6 @@ public final class TrackCache {
     }
 
     /**
-     * Loads the persisted history for a player, newest first.
-     */
-
-    /**
      * Records or updates whether a player liked a track in their listening history.
      */
     public void recordTrackLiked(UUID playerUuid, String trackId, boolean liked) {
@@ -1465,7 +1461,7 @@ public final class TrackCache {
         long p50 = 0, p95 = 0;
         if (!latencies.isEmpty()) {
             p50 = latencies.get((int) (latencies.size() * 0.50));
-            p95 = latencies.get((int) Math.min(latencies.size() - 1, (int) (latencies.size() * 0.95)));
+            p95 = latencies.get(Math.min(latencies.size() - 1, (int) (latencies.size() * 0.95)));
         }
 
         int totalEvaluatedOutcomes = completed + earlySkip + lateSkip;

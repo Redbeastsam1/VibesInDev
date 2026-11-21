@@ -1,7 +1,5 @@
 package dev.vibesindev.vibesmusic.spotify;
 
-
-
 import com.sun.net.httpserver.HttpExchange;
 
 import com.sun.net.httpserver.HttpServer;
@@ -17,8 +15,6 @@ import dev.vibesindev.vibesmusic.recommendation.PlayerTasteProfile;
 import org.bukkit.ChatColor;
 
 import org.bukkit.entity.Player;
-
-
 
 import java.io.File;
 
@@ -72,14 +68,10 @@ import java.util.regex.Pattern;
 
 public final class SpotifyClient {
 
-
-
     public record UserSession(String accessToken, String refreshToken, long expiresAt) {}
 
     public record PendingState(UUID playerUuid, long expiresAt) {}
     public record SpotifyArtistSummary(String id, String name, List<String> genres) {}
-
-
 
     private final Map<UUID, UserSession> userSessions = new ConcurrentHashMap<>();
 
@@ -89,33 +81,21 @@ public final class SpotifyClient {
 
     private final File usersDir;
 
-
-
-
-
     private static final String ACCOUNTS_URL =
 
             "https://accounts.spotify.com";
-
-
 
     private static final String API_URL =
 
             "https://api.spotify.com/v1";
 
-
-
     private static final Pattern STRING =
 
             Pattern.compile("\"([^\"]+)\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"");
 
-
-
     private static final Pattern NUMBER =
 
             Pattern.compile("\"([^\"]+)\"\\s*:\\s*([0-9]+(?:\\.[0-9]+)?)");
-
-
 
     private final VibesInDevPlugin plugin;
 
@@ -148,8 +128,6 @@ public final class SpotifyClient {
         KNOWN_ARTIST_IDS.clear();
     }
 
-
-
     private final String clientId;
 
     private final String clientSecret;
@@ -158,13 +136,9 @@ public final class SpotifyClient {
 
     private final String market;
 
-
-
     private volatile String clientToken;
 
     private volatile long clientTokenExpiresAt;
-
-
 
     private volatile String userAccessToken;
 
@@ -172,11 +146,7 @@ public final class SpotifyClient {
 
     private volatile long userTokenExpiresAt;
 
-
-
     private HttpServer callbackServer;
-
-
 
     public SpotifyClient(
 
@@ -196,8 +166,6 @@ public final class SpotifyClient {
 
                 .build();
 
-
-
         clientId = plugin.getConfig().getString(
 
                 "spotify.client-id",
@@ -205,8 +173,6 @@ public final class SpotifyClient {
                 ""
 
         );
-
-
 
         clientSecret = plugin.getConfig().getString(
 
@@ -216,8 +182,6 @@ public final class SpotifyClient {
 
         );
 
-
-
         redirectUri = plugin.getConfig().getString(
 
                 "spotify.redirect-uri",
@@ -225,8 +189,6 @@ public final class SpotifyClient {
                 "http://127.0.0.1:8888/callback"
 
         );
-
-
 
         market = plugin.getConfig().getString(
 
@@ -248,8 +210,6 @@ public final class SpotifyClient {
 
     }
 
-
-
     private static String escapeHtml(String input) {
         if (input == null) return "";
         return input.replace("&", "&amp;")
@@ -264,8 +224,6 @@ public final class SpotifyClient {
         return !clientId.isBlank() && !clientSecret.isBlank();
 
     }
-
-
 
     public synchronized void loadAllUserSessions() {
 
@@ -312,8 +270,6 @@ public final class SpotifyClient {
             }
 
         }
-
-
 
         // 2. Load legacy single-token fallback if present
 
@@ -363,8 +319,6 @@ public final class SpotifyClient {
 
         } catch (Exception ignored) {}
 
-
-
         if (!userSessions.isEmpty()) {
 
             plugin.getLogger().info("[VibesInDev] Loaded " + userSessions.size() + " authenticated Spotify user session(s).");
@@ -372,8 +326,6 @@ public final class SpotifyClient {
         }
 
     }
-
-
 
     public synchronized void saveUserSession(UUID playerUuid, UserSession session) {
 
@@ -411,8 +363,6 @@ public final class SpotifyClient {
 
     }
 
-
-
     public synchronized boolean logoutPlayer(UUID playerUuid) {
 
         if (playerUuid == null) return false;
@@ -430,8 +380,6 @@ public final class SpotifyClient {
         return removed != null || file.exists();
 
     }
-
-
 
     private synchronized void saveTokens() {
 
@@ -461,8 +409,6 @@ public final class SpotifyClient {
 
     }
 
-
-
     public boolean hasUserAuthorization(UUID playerUuid) {
 
         if (playerUuid != null && userSessions.containsKey(playerUuid)) {
@@ -476,10 +422,6 @@ public final class SpotifyClient {
                 || (userRefreshToken != null && !userRefreshToken.isBlank());
 
     }
-
-
-
-
 
     @SuppressWarnings("null")
 
@@ -505,8 +447,6 @@ public final class SpotifyClient {
 
     }
 
-
-
     public CompletableFuture<List<Track>> resolvePlaylist(String input) {
 
         if (!isConfigured()) {
@@ -523,11 +463,7 @@ public final class SpotifyClient {
 
         }
 
-
-
         String playlistId = extractId(input, "/playlist/");
-
-
 
         return getPlaylistItems(playlistId)
 
@@ -539,8 +475,6 @@ public final class SpotifyClient {
 
                     }
 
-
-
                     int maxTracks = plugin.getConfig().getInt("spotify.playlists.max-tracks", 500);
 
                     if (items.size() > maxTracks) {
@@ -548,8 +482,6 @@ public final class SpotifyClient {
                         items = items.subList(0, maxTracks);
 
                     }
-
-
 
                     List<Track> lazyTracks = new ArrayList<>();
 
@@ -576,8 +508,6 @@ public final class SpotifyClient {
                 });
 
     }
-
-
 
     public CompletableFuture<List<Track>> resolveAlbum(String input) {
 
@@ -595,11 +525,7 @@ public final class SpotifyClient {
 
         }
 
-
-
         String albumId = extractId(input, "/album/");
-
-
 
         return getAlbumItems(albumId)
 
@@ -611,8 +537,6 @@ public final class SpotifyClient {
 
                     }
 
-
-
                     int maxTracks = plugin.getConfig().getInt("spotify.playlists.max-tracks", 500);
 
                     if (items.size() > maxTracks) {
@@ -620,8 +544,6 @@ public final class SpotifyClient {
                         items = items.subList(0, maxTracks);
 
                     }
-
-
 
                     List<Track> lazyTracks = new ArrayList<>();
 
@@ -649,15 +571,11 @@ public final class SpotifyClient {
 
     }
 
-
-
     public synchronized String beginLogin() {
 
         return beginLogin(null);
 
     }
-
-
 
     public synchronized String beginLogin(Player player) {
 
@@ -671,8 +589,6 @@ public final class SpotifyClient {
 
         }
 
-
-
         try {
 
             if (callbackServer != null) {
@@ -683,21 +599,15 @@ public final class SpotifyClient {
 
             }
 
-
-
             URI redirect = URI.create(redirectUri);
 
             String nonce = randomUrlSafe(32);
 
             String state = nonce + "_" + (player != null ? player.getUniqueId().toString() : "host");
 
-
-
             // Cache state for anti-CSRF validation (valid for 10 minutes)
 
             pendingStates.put(state, new PendingState(player != null ? player.getUniqueId() : null, System.currentTimeMillis() + 600_000L));
-
-
 
             // Dual-mode webserver: only start local HttpServer if enabled in config
 
@@ -712,8 +622,6 @@ public final class SpotifyClient {
                     callbackServer.createContext(redirect.getPath(), exchange -> handleCallback(exchange, state, player));
 
                     callbackServer.start();
-
-
 
                     // Auto-shutdown callback server after 120 seconds to prevent lingering open sockets
 
@@ -743,13 +651,9 @@ public final class SpotifyClient {
 
             }
 
-
-
             // Expanded read-only scopes for playlists and taste profile ingestion
 
             String scope = "playlist-read-private playlist-read-collaborative user-top-read user-read-recently-played user-library-read";
-
-
 
             return ACCOUNTS_URL
 
@@ -771,8 +675,6 @@ public final class SpotifyClient {
 
                     + enc(state);
 
-
-
         } catch (Exception e) {
 
             throw new IllegalStateException("Could not generate Spotify authorization URL: " + e.getMessage(), e);
@@ -780,10 +682,6 @@ public final class SpotifyClient {
         }
 
     }
-
-
-
-
 
     private void handleCallback(
 
@@ -795,11 +693,7 @@ public final class SpotifyClient {
 
     ) throws IOException {
 
-
-
         String query = exchange.getRequestURI().getRawQuery();
-
-
 
         String code = queryValue(query, "code");
 
@@ -807,11 +701,7 @@ public final class SpotifyClient {
 
         String error = queryValue(query, "error");
 
-
-
         String response;
-
-
 
         if (error != null) {
 
@@ -849,11 +739,7 @@ public final class SpotifyClient {
 
         }
 
-
-
         byte[] body = response.getBytes(StandardCharsets.UTF_8);
-
-
 
         exchange.getResponseHeaders().set(
 
@@ -863,8 +749,6 @@ public final class SpotifyClient {
 
         );
 
-
-
         exchange.sendResponseHeaders(
 
                 200,
@@ -873,15 +757,11 @@ public final class SpotifyClient {
 
         );
 
-
-
         try (OutputStream out = exchange.getResponseBody()) {
 
             out.write(body);
 
         }
-
-
 
         if (callbackServer != null) {
 
@@ -892,10 +772,6 @@ public final class SpotifyClient {
         }
 
     }
-
-
-
-
 
     /**
 
@@ -918,8 +794,6 @@ public final class SpotifyClient {
             return CompletableFuture.failedFuture(new IllegalArgumentException("Authorization code cannot be empty."));
 
         }
-
-
 
         String input = rawCodeOrUrl.trim();
 
@@ -948,8 +822,6 @@ public final class SpotifyClient {
 
         String state = null;
 
-
-
         if (input.contains("code=")) {
 
             code = queryValue(input.contains("?") ? input.substring(input.indexOf('?') + 1) : input, "code");
@@ -958,15 +830,11 @@ public final class SpotifyClient {
 
         }
 
-
-
         if (code == null || code.isBlank()) {
 
             return CompletableFuture.failedFuture(new IllegalArgumentException("Could not extract authorization code from input."));
 
         }
-
-
 
         // Anti-CSRF verification if state is present
 
@@ -986,8 +854,6 @@ public final class SpotifyClient {
 
         }
 
-
-
         final String finalCode = code;
 
         return CompletableFuture.supplyAsync(() -> {
@@ -999,8 +865,6 @@ public final class SpotifyClient {
                         + "&code=" + enc(finalCode)
 
                         + "&redirect_uri=" + enc(redirectUri);
-
-
 
                 HttpRequest request = HttpRequest.newBuilder()
 
@@ -1020,11 +884,7 @@ public final class SpotifyClient {
 
                         .build();
 
-
-
                 HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
-
-
 
                 if (response.statusCode() != 200) {
 
@@ -1044,8 +904,6 @@ public final class SpotifyClient {
 
                 }
 
-
-
                 String access = string(response.body(), "access_token");
 
                 String refresh = string(response.body(), "refresh_token");
@@ -1054,15 +912,11 @@ public final class SpotifyClient {
 
                 long expiresAt = System.currentTimeMillis() + Math.max(60, expiresIn - 60) * 1000L;
 
-
-
                 if (access == null || access.isBlank()) {
 
                     throw new IOException("Spotify response contained no access_token.");
 
                 }
-
-
 
                 UserSession session = new UserSession(access, refresh, expiresAt);
 
@@ -1078,8 +932,6 @@ public final class SpotifyClient {
 
                     this.userTokenExpiresAt = expiresAt;
 
-
-
                     // Automatically sync taste profile in background
 
                     if (plugin.getConfig().getBoolean("recommendations.spotify-sync-on-login", true)) {
@@ -1089,8 +941,6 @@ public final class SpotifyClient {
                     }
 
                 }
-
-
 
                 return "Spotify account successfully linked!";
 
@@ -1103,8 +953,6 @@ public final class SpotifyClient {
         });
 
     }
-
-
 
     private void exchangeTokenForState(String code, String state, Player player) throws IOException, InterruptedException {
 
@@ -1122,15 +970,11 @@ public final class SpotifyClient {
 
         }
 
-
-
         String body = "grant_type=authorization_code"
 
                 + "&code=" + enc(code)
 
                 + "&redirect_uri=" + enc(redirectUri);
-
-
 
         HttpRequest request = HttpRequest.newBuilder()
 
@@ -1150,8 +994,6 @@ public final class SpotifyClient {
 
                 .build();
 
-
-
         HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
 
         if (response.statusCode() != 200) {
@@ -1160,8 +1002,6 @@ public final class SpotifyClient {
 
         }
 
-
-
         String access = string(response.body(), "access_token");
 
         String refresh = string(response.body(), "refresh_token");
@@ -1169,8 +1009,6 @@ public final class SpotifyClient {
         long expiresIn = numberLong(response.body(), "expires_in", 3600);
 
         long expiresAt = System.currentTimeMillis() + Math.max(60, expiresIn - 60) * 1000L;
-
-
 
         UserSession session = new UserSession(access, refresh, expiresAt);
 
@@ -1208,8 +1046,6 @@ public final class SpotifyClient {
 
     }
 
-
-
     private CompletableFuture<String> getClientToken() {
 
         if (!isConfigured()) {
@@ -1234,15 +1070,11 @@ public final class SpotifyClient {
 
         }
 
-
-
         return CompletableFuture.supplyAsync(() -> {
 
             try {
 
                 String body = "grant_type=client_credentials";
-
-
 
                 HttpRequest request = HttpRequest.newBuilder()
 
@@ -1280,8 +1112,6 @@ public final class SpotifyClient {
 
                         .build();
 
-
-
                 HttpResponse<String> response =
 
                         http.send(
@@ -1291,8 +1121,6 @@ public final class SpotifyClient {
                                 HttpResponse.BodyHandlers.ofString()
 
                         );
-
-
 
                 if (response.statusCode() != 200) {
 
@@ -1312,8 +1140,6 @@ public final class SpotifyClient {
 
                 }
 
-
-
                 clientToken = string(
 
                         response.body(),
@@ -1322,8 +1148,6 @@ public final class SpotifyClient {
 
                 );
 
-
-
                 if (clientToken == null || clientToken.isBlank()) {
 
                     plugin.getLogger().severe("[VibesInDev] Spotify returned no access_token. Body: " + response.body().substring(0, Math.min(200, response.body().length())));
@@ -1331,8 +1155,6 @@ public final class SpotifyClient {
                     throw new IOException("Spotify returned no access token — check client-id and client-secret in config.yml");
 
                 }
-
-
 
                 long expiresIn = numberLong(
 
@@ -1344,19 +1166,13 @@ public final class SpotifyClient {
 
                 );
 
-
-
                 clientTokenExpiresAt =
 
                         System.currentTimeMillis()
 
                                 + Math.max(60, expiresIn - 60) * 1000L;
 
-
-
                 return clientToken;
-
-
 
             } catch (IOException | InterruptedException e) {
 
@@ -1374,13 +1190,9 @@ public final class SpotifyClient {
 
     }
 
-
-
     private CompletableFuture<String> getTrackId(String input) {
 
         String id = extractId(input, "/track/");
-
-
 
         if (id == null || id.isBlank()) {
 
@@ -1396,13 +1208,9 @@ public final class SpotifyClient {
 
         }
 
-
-
         return CompletableFuture.completedFuture(id);
 
     }
-
-
 
     @SuppressWarnings("null")
 
@@ -1413,8 +1221,6 @@ public final class SpotifyClient {
                 ? getUserToken()
 
                 : getClientToken();
-
-
 
         return tokenFuture.thenCompose(token -> {
 
@@ -1429,8 +1235,6 @@ public final class SpotifyClient {
                             + "?market="
 
                             + enc(market);
-
-
 
             HttpRequest request = HttpRequest.newBuilder()
 
@@ -1449,8 +1253,6 @@ public final class SpotifyClient {
                     .GET()
 
                     .build();
-
-
 
             return http.sendAsync(
 
@@ -1474,25 +1276,17 @@ public final class SpotifyClient {
 
                         }
 
-
-
                         String json = response.body();
 
                         com.google.gson.JsonObject root = com.google.gson.JsonParser.parseString(json).getAsJsonObject();
-
-
 
                         String title = root.has("name") && !root.get("name").isJsonNull()
 
                                 ? root.get("name").getAsString() : "Unknown Title";
 
-
-
                         long durationMs = root.has("duration_ms") && !root.get("duration_ms").isJsonNull()
 
                                 ? root.get("duration_ms").getAsLong() : 0L;
-
-
 
                         String artist = "Unknown Artist";
 
@@ -1526,11 +1320,7 @@ public final class SpotifyClient {
 
                         }
 
-
-
                         plugin.getLogger().info("[VibesInDev] Resolved Spotify track: " + artist + " - " + title + " (" + (durationMs / 1000) + "s)");
-
-
 
                         return new SpotifyTrack(
 
@@ -1550,8 +1340,6 @@ public final class SpotifyClient {
 
     }
 
-
-
     private CompletableFuture<List<SpotifyTrack>> getPlaylistItems(
 
             String playlistId
@@ -1563,8 +1351,6 @@ public final class SpotifyClient {
                 ? getUserToken()
 
                 : getClientToken();
-
-
 
         return tokenFuture.thenCompose(
 
@@ -1583,8 +1369,6 @@ public final class SpotifyClient {
         );
 
     }
-
-
 
     private CompletableFuture<List<SpotifyTrack>> getPlaylistPage(
 
@@ -1614,8 +1398,6 @@ public final class SpotifyClient {
 
                         + enc(market);
 
-
-
         HttpRequest request = HttpRequest.newBuilder()
 
                 .uri(URI.create(url))
@@ -1633,8 +1415,6 @@ public final class SpotifyClient {
                 .GET()
 
                 .build();
-
-
 
         return http.sendAsync(
 
@@ -1662,8 +1442,6 @@ public final class SpotifyClient {
 
                     }
 
-
-
                     if (response.statusCode() == 403) {
 
                         plugin.getLogger().warning("[VibesInDev] Spotify 403 for playlist " + playlistId);
@@ -1679,8 +1457,6 @@ public final class SpotifyClient {
                         );
 
                     }
-
-
 
                     if (response.statusCode() == 404) {
 
@@ -1714,8 +1490,6 @@ public final class SpotifyClient {
 
                     }
 
-
-
                     if (response.statusCode() != 200) {
 
                         plugin.getLogger().warning("[VibesInDev] Spotify playlist HTTP " + response.statusCode() + " body: " + response.body().substring(0, Math.min(300, response.body().length())));
@@ -1734,19 +1508,13 @@ public final class SpotifyClient {
 
                     }
 
-
-
                     String json = response.body();
 
                     List<SpotifyTrack> page =
 
                             parsePlaylistItems(json);
 
-
-
                     result.addAll(page);
-
-
 
                     int total = (int) numberLong(
 
@@ -1757,8 +1525,6 @@ public final class SpotifyClient {
                             result.size()
 
                     );
-
-
 
                     if (result.size() >= total
 
@@ -1771,8 +1537,6 @@ public final class SpotifyClient {
                         );
 
                     }
-
-
 
                     return getPlaylistPage(
 
@@ -1789,10 +1553,6 @@ public final class SpotifyClient {
                 });
 
     }
-
-
-
-
 
     // =========================================================
 
@@ -1845,8 +1605,6 @@ public final class SpotifyClient {
 
     // =========================================================
 
-
-
     public CompletableFuture<String> getUserToken(UUID playerUuid) {
 
         if (playerUuid != null) {
@@ -1878,13 +1636,9 @@ public final class SpotifyClient {
 
     }
 
-
-
     private CompletableFuture<String> refreshUserTokenForPlayer(UUID playerUuid, UserSession session) {
 
         String body = "grant_type=refresh_token&refresh_token=" + enc(session.refreshToken());
-
-
 
         HttpRequest request = HttpRequest.newBuilder()
 
@@ -1903,8 +1657,6 @@ public final class SpotifyClient {
                 .POST(HttpRequest.BodyPublishers.ofString(body))
 
                 .build();
-
-
 
         return http.sendAsync(request, HttpResponse.BodyHandlers.ofString())
 
@@ -1944,8 +1696,6 @@ public final class SpotifyClient {
 
                     long expiresAt = System.currentTimeMillis() + Math.max(60, expiresIn - 60) * 1000L;
 
-
-
                     UserSession updated = new UserSession(newAccess, newRefresh, expiresAt);
 
                     saveUserSession(playerUuid, updated);
@@ -1955,8 +1705,6 @@ public final class SpotifyClient {
                 });
 
     }
-
-
 
     /**
 
@@ -1984,8 +1732,6 @@ public final class SpotifyClient {
                     .GET()
 
                     .build();
-
-
 
             return http.sendAsync(request, HttpResponse.BodyHandlers.ofString())
 
@@ -2031,8 +1777,6 @@ public final class SpotifyClient {
 
     }
 
-
-
     /**
 
      * Fetches micro-genres for an artist from GET /v1/artists/{id}.
@@ -2056,8 +1800,6 @@ public final class SpotifyClient {
                     .GET()
 
                     .build();
-
-
 
             return http.sendAsync(request, HttpResponse.BodyHandlers.ofString())
 
@@ -2193,8 +1935,6 @@ public final class SpotifyClient {
         });
     }
 
-
-
     /**
 
      * Searches for tracks in Spotify by micro-genre: GET /v1/search?q=genre:"{genre}"&type=track.
@@ -2248,8 +1988,6 @@ public final class SpotifyClient {
                     return CompletableFuture.completedFuture(Collections.emptyList());
                 }).exceptionally(ex -> Collections.emptyList());
     }
-
-
 
     /**
 
@@ -2411,8 +2149,6 @@ public final class SpotifyClient {
             }
         });
     }
-
-
 
     public CompletableFuture<List<Track>> fetchUserTopTracks(UUID playerUuid, String timeRange, int limit) {
         if (!isFeatureAvailable(SpotifyHttp.Feature.USER_TOP_TRACKS)) {
@@ -2597,15 +2333,11 @@ public final class SpotifyClient {
 
         }
 
-
-
         if (userRefreshToken != null && !userRefreshToken.isBlank()) {
 
             return refreshUserToken();
 
         }
-
-
 
         return CompletableFuture.failedFuture(
 
@@ -2619,8 +2351,6 @@ public final class SpotifyClient {
 
     }
 
-
-
     private CompletableFuture<String> refreshUserToken() {
 
         String body =
@@ -2628,8 +2358,6 @@ public final class SpotifyClient {
                 "grant_type=refresh_token"
 
                         + "&refresh_token=" + enc(userRefreshToken);
-
-
 
         HttpRequest request = HttpRequest.newBuilder()
 
@@ -2663,8 +2391,6 @@ public final class SpotifyClient {
 
                 .build();
 
-
-
         return http.sendAsync(
 
                         request,
@@ -2693,8 +2419,6 @@ public final class SpotifyClient {
 
                     }
 
-
-
                     String newAccess = string(
 
                             response.body(),
@@ -2702,8 +2426,6 @@ public final class SpotifyClient {
                             "access_token"
 
                     );
-
-
 
                     if (newAccess == null || newAccess.isBlank()) {
 
@@ -2715,11 +2437,7 @@ public final class SpotifyClient {
 
                     }
 
-
-
                     userAccessToken = newAccess;
-
-
 
                     String newRefresh = string(
 
@@ -2735,8 +2453,6 @@ public final class SpotifyClient {
 
                     }
 
-
-
                     long expiresIn = numberLong(
 
                             response.body(),
@@ -2747,19 +2463,13 @@ public final class SpotifyClient {
 
                     );
 
-
-
                     userTokenExpiresAt =
 
                             System.currentTimeMillis()
 
                                     + Math.max(60, expiresIn - 60) * 1000L;
 
-
-
                     saveTokens();
-
-
 
                     plugin.getLogger().info("[VibesInDev] Refreshed Spotify user access token successfully.");
 
@@ -2769,8 +2479,6 @@ public final class SpotifyClient {
 
     }
 
-
-
     public boolean hasUserAuthorization() {
 
         return (userAccessToken != null && !userAccessToken.isBlank() && System.currentTimeMillis() < userTokenExpiresAt)
@@ -2778,8 +2486,6 @@ public final class SpotifyClient {
                 || (userRefreshToken != null && !userRefreshToken.isBlank());
 
     }
-
-
 
     private CompletableFuture<List<SpotifyTrack>> getAlbumItems(
 
@@ -2792,8 +2498,6 @@ public final class SpotifyClient {
                 ? getUserToken()
 
                 : getClientToken();
-
-
 
         return tokenFuture.thenCompose(
 
@@ -2812,8 +2516,6 @@ public final class SpotifyClient {
         );
 
     }
-
-
 
     private CompletableFuture<List<SpotifyTrack>> getAlbumPage(
 
@@ -2843,8 +2545,6 @@ public final class SpotifyClient {
 
                         + enc(market);
 
-
-
         HttpRequest request = HttpRequest.newBuilder()
 
                 .uri(URI.create(url))
@@ -2862,8 +2562,6 @@ public final class SpotifyClient {
                 .GET()
 
                 .build();
-
-
 
         return http.sendAsync(
 
@@ -2891,19 +2589,13 @@ public final class SpotifyClient {
 
                     }
 
-
-
                     String json = response.body();
 
                     List<SpotifyTrack> page =
 
                             parseAlbumItems(json);
 
-
-
                     result.addAll(page);
-
-
 
                     int total = (int) numberLong(
 
@@ -2914,8 +2606,6 @@ public final class SpotifyClient {
                             result.size()
 
                     );
-
-
 
                     if (result.size() >= total
 
@@ -2928,8 +2618,6 @@ public final class SpotifyClient {
                         );
 
                     }
-
-
 
                     return getAlbumPage(
 
@@ -2946,8 +2634,6 @@ public final class SpotifyClient {
                 });
 
     }
-
-
 
     private static List<SpotifyTrack> parseAlbumItems(String json) {
 
@@ -3007,8 +2693,6 @@ public final class SpotifyClient {
 
     }
 
-
-
     private static List<SpotifyTrack> parsePlaylistItems(String json) {
 
         List<SpotifyTrack> result = new ArrayList<>();
@@ -3023,23 +2707,17 @@ public final class SpotifyClient {
 
             if (items == null) return result;
 
-
-
             for (com.google.gson.JsonElement el : items) {
 
                 if (!el.isJsonObject()) continue;
 
                 com.google.gson.JsonObject item = el.getAsJsonObject();
 
-
-
                 // Each playlist item wraps the actual track in a "track" field
 
                 if (!item.has("track") || item.get("track").isJsonNull()) continue;
 
                 com.google.gson.JsonObject track = item.getAsJsonObject("track");
-
-
 
                 // Skip local files (no Spotify ID)
 
@@ -3049,8 +2727,6 @@ public final class SpotifyClient {
 
                 if (id.isBlank()) continue;
 
-
-
                 String title = track.has("name") && !track.get("name").isJsonNull()
 
                         ? track.get("name").getAsString() : null;
@@ -3058,8 +2734,6 @@ public final class SpotifyClient {
                 long durationMs = track.has("duration_ms") && !track.get("duration_ms").isJsonNull()
 
                         ? track.get("duration_ms").getAsLong() : 0L;
-
-
 
                 String artist = "Unknown";
 
@@ -3081,8 +2755,6 @@ public final class SpotifyClient {
 
                 }
 
-
-
                 if (title != null && !title.isBlank()) {
 
                     result.add(new SpotifyTrack(id, title, artist, durationMs / 1000));
@@ -3101,8 +2773,6 @@ public final class SpotifyClient {
 
     }
 
-
-
     private static String extractId(
 
             String input,
@@ -3116,8 +2786,6 @@ public final class SpotifyClient {
             return null;
 
         }
-
-
 
         int index = input.indexOf(marker);
 
@@ -3149,8 +2817,6 @@ public final class SpotifyClient {
 
         }
 
-
-
         String rest = input.substring(index + marker.length());
 
         int end = rest.length();
@@ -3169,15 +2835,11 @@ public final class SpotifyClient {
 
         }
 
-
-
         String id = rest.substring(0, end);
 
         return id.isBlank() ? null : id;
 
     }
-
-
 
     private static String string(
 
@@ -3189,8 +2851,6 @@ public final class SpotifyClient {
 
         Matcher matcher = STRING.matcher(json);
 
-
-
         while (matcher.find()) {
 
             if (matcher.group(1).equals(key)) {
@@ -3201,13 +2861,9 @@ public final class SpotifyClient {
 
         }
 
-
-
         return null;
 
     }
-
-
 
     private static long numberLong(
 
@@ -3220,8 +2876,6 @@ public final class SpotifyClient {
     ) {
 
         Matcher matcher = NUMBER.matcher(json);
-
-
 
         while (matcher.find()) {
 
@@ -3249,13 +2903,9 @@ public final class SpotifyClient {
 
         }
 
-
-
         return fallback;
 
     }
-
-
 
     private static String unescape(String value) {
 
@@ -3275,8 +2925,6 @@ public final class SpotifyClient {
 
     }
 
-
-
     private static String queryValue(
 
             String query,
@@ -3291,13 +2939,9 @@ public final class SpotifyClient {
 
         }
 
-
-
         for (String part : query.split("&")) {
 
             String[] pieces = part.split("=", 2);
-
-
 
             if (pieces.length == 2
 
@@ -3315,13 +2959,9 @@ public final class SpotifyClient {
 
         }
 
-
-
         return null;
 
     }
-
-
 
     private static String enc(String value) {
 
@@ -3335,15 +2975,11 @@ public final class SpotifyClient {
 
     }
 
-
-
     private static String randomUrlSafe(int bytes) {
 
         byte[] data = new byte[bytes];
 
         new SecureRandom().nextBytes(data);
-
-
 
         return Base64.getUrlEncoder()
 

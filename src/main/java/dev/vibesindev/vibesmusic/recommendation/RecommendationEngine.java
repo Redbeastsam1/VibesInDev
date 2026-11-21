@@ -235,7 +235,7 @@ public final class RecommendationEngine {
             }
         }
 
-        CompletableFuture<Void> allGather = CompletableFuture.allOf(guardedFutures.toArray(new CompletableFuture[0]))
+        CompletableFuture<Void> allGather = CompletableFuture.allOf(guardedFutures.toArray(new CompletableFuture<?>[0]))
                 .completeOnTimeout(null, 6000L, TimeUnit.MILLISECONDS);
 
         return allGather
@@ -542,7 +542,7 @@ public final class RecommendationEngine {
         }
 
         if (!asyncFutures.isEmpty()) {
-            return CompletableFuture.allOf(asyncFutures.toArray(new CompletableFuture[0]))
+            return CompletableFuture.allOf(asyncFutures.toArray(new CompletableFuture<?>[0]))
                     .thenApply(v -> list)
                     .exceptionally(err -> list);
         }

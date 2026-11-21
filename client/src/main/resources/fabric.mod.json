@@ -16,7 +16,7 @@
     "icon": "assets/vibesindev/icon.png",
     "environment": "*",
     "entrypoints": {
-        "main": [
+        "main": [client/src/main/resources/fabric.mod.json
             "dev.vibesindev.vibesmusic.VibesInDev"
         ],
         "client": [

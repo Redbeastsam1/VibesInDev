@@ -97,7 +97,7 @@ public class ArtistLineageEnricher {
             return CompletableFuture.completedFuture(Collections.emptyList());
         }
 
-        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+        return CompletableFuture.allOf(futures.toArray(new CompletableFuture<?>[0]))
                 .thenApply(v -> {
                     List<TrackCache.ArtistRelation> aggregated = new ArrayList<>();
                     Map<String, Double> seen = new HashMap<>();

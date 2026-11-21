@@ -103,9 +103,6 @@ public final class RecommendationManager implements org.bukkit.event.Listener {
     // =========================================================
 
     /**
-     * Gets or creates the taste profile for a player, bootstrapping from SQLite history if needed.
-     */
-    /**
      * Gets or creates the taste profile in-memory without blocking Bukkit's main thread on SQLite.
      */
     public PlayerTasteProfile getOrCreateProfile(UUID playerUuid) {

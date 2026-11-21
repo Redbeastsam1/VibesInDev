@@ -9,21 +9,12 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(MusicManager.class)
 public class MusicManagerMixin {
+  @Inject(method = "tick", at = @At("HEAD"))
+  private void vibesindev$preventVanillaMusic(CallbackInfo ci) {
+    if (MusicAudioPlayer.isPlaying()) {
+      MusicManager musicManager = (MusicManager) (Object) this;
 
-    @Inject(
-            method = "tick",
-            at = @At("HEAD")
-    )
-    private void vibesindev$preventVanillaMusic(
-            CallbackInfo ci
-    ) {
-
-        if (MusicAudioPlayer.isPlaying()) {
-
-            MusicManager musicManager =
-                    (MusicManager) (Object) this;
-
-            musicManager.stopPlaying();
-        }
+      musicManager.stopPlaying();
     }
+  }
 }

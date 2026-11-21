@@ -1,0 +1,58 @@
+name: Build & Test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  server-plugin:
+    name: Build Server Plugin (Spigot/Paper)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'microsoft'
+          cache: maven
+
+      - name: Build & Test with Maven
+        run: |
+          chmod +x ./mvnw
+          ./mvnw clean package
+
+      - name: Upload Server Jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: VibesInDev-Server-Plugin
+          path: target/VibesInDev-*.jar
+
+  client-mod:
+    name: Build Client Mod (Fabric)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'microsoft'
+
+      - name: Build with Gradle
+        working-directory: ./client
+        run: |
+          chmod +x ./gradlew
+          ./gradlew build -x test
+
+      - name: Upload Client Mod Jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: VibesInDev-Fabric-Mod
+          path: client/build/libs/vibesindev-*.jar

@@ -1,0 +1,39 @@
+{
+    "schemaVersion": 1,
+    "id": "vibesindev",
+    "version": "${version}",
+    "name": "VibesInDev",
+    "description": "Real-time client-side music playback companion for VibesInDev Minecraft servers.",
+    "authors": [
+        "Redbeastsam"
+    ],
+    "contact": {
+        "homepage": "https://github.com/Redbeastsam/VibesInDev",
+        "sources": "https://github.com/Redbeastsam/VibesInDev",
+        "issues": "https://github.com/Redbeastsam/VibesInDev/issues"
+    },
+    "license": "MIT",
+    "icon": "assets/vibesindev/icon.png",
+    "environment": "*",
+    "entrypoints": {
+        "main": [
+            "dev.vibesindev.vibesmusic.VibesInDev"
+        ],
+        "client": [
+            "dev.vibesindev.vibesmusic.client.VibesInDevClient"
+        ]
+    },
+    "mixins": [
+        "vibesindev.mixins.json",
+        {
+            "config": "vibesindev.client.mixins.json",
+            "environment": "client"
+        }
+    ],
+    "depends": {
+        "fabricloader": ">=0.19.5",
+        "minecraft": "~26.3",
+        "java": ">=25",
+        "fabric-api": "*"
+    }
+}

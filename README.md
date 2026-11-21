@@ -2,6 +2,14 @@
 
 VibesInDev is a Spigot music plugin designed to use a separate Fabric client mod for actual audio playback over the existing Minecraft packet connection, paired with an advanced multi-objective recommendation engine (Recommendation Engine v2).
 
+## Repository Structure
+
+This repository is structured as a unified monorepo containing both the server plugin and client companion mod:
+
+- **Root (`/`)**: Spigot/Paper server plugin source code, built with Maven (`./mvnw clean package`).
+- **[`client/`](client/)**: Fabric client companion mod, built with Gradle (`./gradlew build`). Formatted for direct upload to Modrinth.
+- **[`tools/`](tools/)**: Offline recommendation ranker training utilities (`fit_ranker.py`).
+
 ## Current Server-Side Architecture
 
 ```text
@@ -104,3 +112,9 @@ VibesInDev logs candidate-level feature vectors and listening outcomes strictly 
 | `/music spotify logout` | `vibesindev.spotify` | Unlink Spotify account and revoke session |
 | `/music rec stats [days]` | `vibesindev.admin` | View recommendation engine diagnostic statistics |
 | `/music reload` | `vibesindev.admin` | Reload `config.yml` |
+
+---
+
+## License
+
+This project is open-source software licensed under the MIT License. See [LICENSE](LICENSE) for details.

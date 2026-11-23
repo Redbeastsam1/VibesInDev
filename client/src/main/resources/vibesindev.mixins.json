@@ -1,6 +1,6 @@
 {
 	"required": true,
-	"package": "dev.vibesindev.vibesmusic.mixin",
+	"package": "dev.redbeastsam.vibesindev.mixin",
 	"compatibilityLevel": "JAVA_25",
 	"mixins": [
 		"ExampleMixin"

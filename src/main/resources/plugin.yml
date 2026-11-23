@@ -1,6 +1,6 @@
 name: VibesInDev
 version: '${project.version}'
-main: dev.vibesindev.vibesmusic.VibesInDevPlugin
+main: dev.redbeastsam.vibesindev.VibesInDevPlugin
 api-version: '26.3'
 author: Redbeastsam
 description: Music source resolver and client-side playback backend.

@@ -16,11 +16,11 @@
     "icon": "assets/vibesindev/icon.png",
     "environment": "*",
     "entrypoints": {
-        "main": [client/src/main/resources/fabric.mod.json
-            "dev.vibesindev.vibesmusic.VibesInDev"
+        "main": [
+            "dev.redbeastsam.vibesindev.VibesInDev"
         ],
         "client": [
-            "dev.vibesindev.vibesmusic.client.VibesInDevClient"
+            "dev.redbeastsam.vibesindev.VibesInDevClient"
         ]
     },
     "mixins": [

@@ -468,15 +468,27 @@ public final class MusicPlaybackManager {
   public void previous(Player player) {
     UUID uuid = player.getUniqueId();
 
+    Track current = plugin.queues().current(uuid);
+    PlaybackSession session = getSession(uuid);
+
+    if (session != null && session.getPositionMs() > 3000L && current != null) {
+      seek(player, 0L);
+      player.sendMessage(ChatColor.YELLOW + "⏮ Restarted track from beginning.");
+      return;
+    }
+
     Track previous = plugin.queues().previous(uuid);
 
     if (previous == null) {
+      if (current != null) {
+        seek(player, 0L);
+        player.sendMessage(ChatColor.YELLOW + "⏮ Restarted track from beginning.");
+        return;
+      }
       player.sendMessage(ChatColor.YELLOW + "There is no previous track.");
 
       return;
     }
-
-    Track current = plugin.queues().current(uuid);
 
     if (current != null) {
       plugin.queues().pushFront(uuid, current);
@@ -972,6 +984,9 @@ public final class MusicPlaybackManager {
     }
 
     Track current = party.getCurrentTrack();
+    if (current != null) {
+      party.addHistory(current);
+    }
     if (current != null && plugin.recommendations() != null) {
       PlaybackSession curSession = sessions.get(party.getPartyId());
       long playedMs = curSession != null ? curSession.getPositionMs() : 0L;
@@ -990,6 +1005,10 @@ public final class MusicPlaybackManager {
         plugin.recommendations().recordOutcome(member, current, playedMs, durMs, outcome);
       }
     }
+    if (current != null) {
+      party.addHistory(current);
+    }
+
     Track next = party.dequeue();
 
     if (next == null) {
@@ -1016,6 +1035,47 @@ public final class MusicPlaybackManager {
     }
 
     startPartyTrack(player, party, next);
+  }
+
+  public void partyPrevious(Player player) {
+    MusicParty party = plugin.parties().getPartyByPlayer(player.getUniqueId());
+
+    if (party == null) {
+      player.sendMessage(ChatColor.YELLOW + "You are not in a music party.");
+      return;
+    }
+
+    if (!party.isOwner(player.getUniqueId())) {
+      player.sendMessage(ChatColor.RED + "Only the party owner can control party playback.");
+      return;
+    }
+
+    Track current = party.getCurrentTrack();
+    PlaybackSession curSession = sessions.get(party.getPartyId());
+
+    if (curSession != null && curSession.getPositionMs() > 3000L && current != null) {
+      partySeek(player, 0L);
+      broadcastToPartyAll(party, ChatColor.YELLOW + "⏮ Restarted track from beginning.");
+      return;
+    }
+
+    Track previous = party.previous();
+    if (previous == null) {
+      if (current != null) {
+        partySeek(player, 0L);
+        broadcastToPartyAll(party, ChatColor.YELLOW + "⏮ Restarted track from beginning.");
+        return;
+      }
+      player.sendMessage(ChatColor.YELLOW + "There is no previous party track.");
+      return;
+    }
+
+    if (current != null) {
+      party.pushFront(current);
+    }
+
+    stopPartyStreams(party);
+    startPartyTrack(player, party, previous);
   }
 
   public void syncNewPartyMember(Player player, MusicParty party) {
@@ -1279,6 +1339,10 @@ public final class MusicPlaybackManager {
       }
 
       return;
+    }
+
+    if (current != null) {
+      party.addHistory(current);
     }
 
     Track next = party.dequeue();

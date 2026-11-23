@@ -19,6 +19,7 @@ public final class MusicParty {
   private UUID owner;
   private final List<UUID> members = new ArrayList<>();
   private final Deque<Track> queue = new ArrayDeque<>();
+  private final Deque<Track> history = new ArrayDeque<>();
   private Track currentTrack;
   private boolean paused;
   private boolean autoPaused;
@@ -137,6 +138,34 @@ public final class MusicParty {
 
   public void clearQueue() {
     queue.clear();
+  }
+
+  public void pushFront(Track track) {
+    if (track != null) {
+      queue.addFirst(track);
+    }
+  }
+
+  public void addHistory(Track track) {
+    if (track == null) {
+      return;
+    }
+    history.addLast(track);
+    while (history.size() > 50) {
+      history.pollFirst();
+    }
+  }
+
+  public Track previous() {
+    return history.pollLast();
+  }
+
+  public List<Track> getHistory() {
+    return Collections.unmodifiableList(new ArrayList<>(history));
+  }
+
+  public void clearHistory() {
+    history.clear();
   }
 
   // ============================================================

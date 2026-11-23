@@ -439,7 +439,7 @@ public final class MusicCommand implements CommandExecutor, TabCompleter {
 
       case "seek" -> seek(player, args);
 
-      case "previous" -> plugin.playback().previous(player);
+      case "previous" -> previous(player);
 
       case "shuffle" -> shuffle(player);
 
@@ -1679,6 +1679,19 @@ public final class MusicCommand implements CommandExecutor, TabCompleter {
     }
 
     plugin.playback().next(player);
+  }
+
+  private void previous(Player player) {
+    if (!player.hasPermission("vibesindev.skip")) {
+      deny(player);
+      return;
+    }
+    if (plugin.parties().getPartyByPlayer(player.getUniqueId()) != null) {
+      plugin.playback().partyPrevious(player);
+      return;
+    }
+
+    plugin.playback().previous(player);
   }
 
   private void pause(Player player) {

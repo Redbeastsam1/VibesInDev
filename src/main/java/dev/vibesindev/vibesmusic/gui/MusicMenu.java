@@ -61,11 +61,20 @@ public final class MusicMenu implements Listener {
     ItemStack border = item(Material.BLACK_STAINED_GLASS_PANE, " ", List.of());
     for (int i = 0; i < inv.getSize(); i++) inv.setItem(i, border);
 
-    PlaybackSession session = plugin.playback().getSession(player.getUniqueId());
     MusicParty party = plugin.parties().getPartyByPlayer(player.getUniqueId());
+    PlaybackSession session =
+        (party != null)
+            ? plugin.playback().getSession(party.getPartyId())
+            : plugin.playback().getSession(player.getUniqueId());
     Track track = resolveCurrentTrack(session, party);
-    boolean playing = plugin.network().isPlaying(player);
-    boolean paused = plugin.network().isPaused(player);
+    boolean playing =
+        (party != null)
+            ? (party.getCurrentTrack() != null && !party.isPaused())
+            : (session != null
+                && (session.getState() == PlaybackState.PLAYING
+                    || session.getState() == PlaybackState.PREPARING)
+                && plugin.network().isPlaying(player));
+    boolean paused = (party != null) ? party.isPaused() : plugin.network().isPaused(player);
 
     // Now Playing info
     if (track != null) {
@@ -279,24 +288,45 @@ public final class MusicMenu implements Listener {
         }
       }
       case SLOT_PREV -> {
-        plugin.playback().previous(player);
+        MusicParty party = plugin.parties().getPartyByPlayer(player.getUniqueId());
+        if (party != null) {
+          plugin.playback().partyPrevious(player);
+        } else {
+          plugin.playback().previous(player);
+        }
         refreshLater(top, player);
       }
       case SLOT_PLAYPAUSE -> {
-        if (!plugin.network().isPlaying(player)) {
-          player.sendMessage(ChatColor.YELLOW + "No music is currently playing.");
-        } else if (plugin.network().isPaused(player)) {
-          plugin.playback().resume(player);
-          player.sendMessage(ChatColor.GREEN + "Music resumed.");
+        MusicParty party = plugin.parties().getPartyByPlayer(player.getUniqueId());
+        if (party != null) {
+          if (!party.isOwner(player.getUniqueId())) {
+            player.sendMessage(ChatColor.RED + "Only the party owner can control party playback.");
+          } else if (party.isPaused()) {
+            plugin.playback().partyResume(player);
+          } else {
+            plugin.playback().partyPause(player);
+          }
         } else {
-          plugin.playback().pause(player);
-          player.sendMessage(ChatColor.YELLOW + "Music paused.");
+          if (!plugin.network().isPlaying(player)) {
+            player.sendMessage(ChatColor.YELLOW + "No music is currently playing.");
+          } else if (plugin.network().isPaused(player)) {
+            plugin.playback().resume(player);
+            player.sendMessage(ChatColor.GREEN + "Music resumed.");
+          } else {
+            plugin.playback().pause(player);
+            player.sendMessage(ChatColor.YELLOW + "Music paused.");
+          }
         }
         refreshLater(top, player);
       }
       case SLOT_QUEUE_BTN -> plugin.queueMenu().open(player);
       case SLOT_NEXT -> {
-        plugin.playback().next(player);
+        MusicParty party = plugin.parties().getPartyByPlayer(player.getUniqueId());
+        if (party != null) {
+          plugin.playback().partyNext(player);
+        } else {
+          plugin.playback().next(player);
+        }
         refreshLater(top, player);
       }
       case SLOT_VOL_DOWN -> {
@@ -314,12 +344,17 @@ public final class MusicMenu implements Listener {
                 + "%");
       }
       case SLOT_STOP -> {
-        if (!plugin.network().isPlaying(player)) {
-          player.sendMessage(ChatColor.YELLOW + "No music is currently playing.");
-          return;
+        MusicParty party = plugin.parties().getPartyByPlayer(player.getUniqueId());
+        if (party != null) {
+          plugin.playback().partyStop(player);
+        } else {
+          if (!plugin.network().isPlaying(player)) {
+            player.sendMessage(ChatColor.YELLOW + "No music is currently playing.");
+            return;
+          }
+          plugin.playback().stop(player);
+          player.sendMessage(ChatColor.RED + "Music stopped.");
         }
-        plugin.playback().stop(player);
-        player.sendMessage(ChatColor.RED + "Music stopped.");
         refreshLater(top, player);
       }
       case SLOT_NOWLINK -> plugin.nowPlayingMenu().open(player);

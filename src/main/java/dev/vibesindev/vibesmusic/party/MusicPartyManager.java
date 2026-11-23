@@ -294,6 +294,8 @@ public final class MusicPartyManager {
 
     party.clearQueue();
 
+    party.clearHistory();
+
     party.clearCurrentTrack();
 
     party.setPaused(false);

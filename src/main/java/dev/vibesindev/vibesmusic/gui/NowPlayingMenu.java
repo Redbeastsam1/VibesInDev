@@ -2,6 +2,7 @@ package dev.vibesindev.vibesmusic.gui;
 
 import dev.vibesindev.vibesmusic.VibesInDevPlugin;
 import dev.vibesindev.vibesmusic.model.Track;
+import dev.vibesindev.vibesmusic.party.MusicParty;
 import dev.vibesindev.vibesmusic.playback.PlaybackSession;
 import dev.vibesindev.vibesmusic.playback.PlaybackState;
 import dev.vibesindev.vibesmusic.queue.RepeatMode;
@@ -50,8 +51,15 @@ public final class NowPlayingMenu implements Listener {
   }
 
   private void populate(Inventory inv, Player player) {
-    PlaybackSession session = plugin.playback().getSession(player.getUniqueId());
-    Track track = (session != null) ? session.getTrack() : null;
+    MusicParty party = plugin.parties().getPartyByPlayer(player.getUniqueId());
+    PlaybackSession session =
+        (party != null)
+            ? plugin.playback().getSession(party.getPartyId())
+            : plugin.playback().getSession(player.getUniqueId());
+    Track track =
+        (party != null && party.getCurrentTrack() != null)
+            ? party.getCurrentTrack()
+            : ((session != null) ? session.getTrack() : null);
 
     // --- Slot 4: track info ---
     if (track != null && session != null) {
@@ -94,8 +102,14 @@ public final class NowPlayingMenu implements Listener {
             ChatColor.WHITE + "⏮ Previous",
             List.of(ChatColor.GRAY + "Go to the previous track")));
 
-    boolean playing = plugin.network().isPlaying(player);
-    boolean paused = plugin.network().isPaused(player);
+    boolean playing =
+        (party != null)
+            ? (party.getCurrentTrack() != null && !party.isPaused())
+            : (session != null
+                && (session.getState() == PlaybackState.PLAYING
+                    || session.getState() == PlaybackState.PREPARING)
+                && plugin.network().isPlaying(player));
+    boolean paused = (party != null) ? party.isPaused() : plugin.network().isPaused(player);
 
     if (!playing || track == null) {
       inv.setItem(
@@ -231,13 +245,25 @@ public final class NowPlayingMenu implements Listener {
 
     switch (slot) {
       case 10 -> {
-        plugin.playback().previous(player);
+        MusicParty party = plugin.parties().getPartyByPlayer(player.getUniqueId());
+        if (party != null) {
+          plugin.playback().partyPrevious(player);
+        } else {
+          plugin.playback().previous(player);
+        }
         player.sendMessage(ChatColor.YELLOW + "⏮ Previous track.");
         refreshLater(top, player);
       }
       case 11 -> {
-        PlaybackSession sess = plugin.playback().getSession(player.getUniqueId());
-        Track cur = (sess != null) ? sess.getTrack() : null;
+        MusicParty party = plugin.parties().getPartyByPlayer(player.getUniqueId());
+        PlaybackSession sess =
+            (party != null)
+                ? plugin.playback().getSession(party.getPartyId())
+                : plugin.playback().getSession(player.getUniqueId());
+        Track cur =
+            (party != null && party.getCurrentTrack() != null)
+                ? party.getCurrentTrack()
+                : ((sess != null) ? sess.getTrack() : null);
         if (cur != null) {
           boolean alreadyLiked = plugin.cache().isTrackLiked(player.getUniqueId(), cur.id());
           boolean newLikedState = !alreadyLiked;
@@ -268,8 +294,15 @@ public final class NowPlayingMenu implements Listener {
         }
       }
       case 15 -> {
-        PlaybackSession sess = plugin.playback().getSession(player.getUniqueId());
-        Track cur = (sess != null) ? sess.getTrack() : null;
+        MusicParty party = plugin.parties().getPartyByPlayer(player.getUniqueId());
+        PlaybackSession sess =
+            (party != null)
+                ? plugin.playback().getSession(party.getPartyId())
+                : plugin.playback().getSession(player.getUniqueId());
+        Track cur =
+            (party != null && party.getCurrentTrack() != null)
+                ? party.getCurrentTrack()
+                : ((sess != null) ? sess.getTrack() : null);
         if (cur != null) {
           if (plugin.recommendations() != null) {
             plugin.recommendations().recordDislike(player.getUniqueId(), cur);
@@ -283,26 +316,48 @@ public final class NowPlayingMenu implements Listener {
                   + cur.title()
                   + ChatColor.RED
                   + ". 7-day cooldown applied. Skipping...");
-          plugin.playback().next(player);
+          if (party != null) {
+            plugin.playback().partyNext(player);
+          } else {
+            plugin.playback().next(player);
+          }
           refreshLater(top, player);
         } else {
           player.sendMessage(ChatColor.GRAY + "No music is playing.");
         }
       }
       case 13 -> {
-        if (!plugin.network().isPlaying(player)) {
-          player.sendMessage(ChatColor.GRAY + "No music is playing.");
-        } else if (plugin.network().isPaused(player)) {
-          plugin.network().resume(player);
-          player.sendMessage(ChatColor.GREEN + "▶ Resumed.");
+        MusicParty party = plugin.parties().getPartyByPlayer(player.getUniqueId());
+        if (party != null) {
+          if (!party.isOwner(player.getUniqueId())) {
+            player.sendMessage(ChatColor.RED + "Only the party owner can control party playback.");
+          } else if (party.isPaused()) {
+            plugin.playback().partyResume(player);
+            player.sendMessage(ChatColor.GREEN + "▶ Resumed party music.");
+          } else {
+            plugin.playback().partyPause(player);
+            player.sendMessage(ChatColor.YELLOW + "⏸ Paused party music.");
+          }
         } else {
-          plugin.network().pause(player);
-          player.sendMessage(ChatColor.YELLOW + "⏸ Paused.");
+          if (!plugin.network().isPlaying(player)) {
+            player.sendMessage(ChatColor.GRAY + "No music is playing.");
+          } else if (plugin.network().isPaused(player)) {
+            plugin.playback().resume(player);
+            player.sendMessage(ChatColor.GREEN + "▶ Resumed.");
+          } else {
+            plugin.playback().pause(player);
+            player.sendMessage(ChatColor.YELLOW + "⏸ Paused.");
+          }
         }
         refreshLater(top, player);
       }
       case 16 -> {
-        plugin.playback().next(player);
+        MusicParty party = plugin.parties().getPartyByPlayer(player.getUniqueId());
+        if (party != null) {
+          plugin.playback().partyNext(player);
+        } else {
+          plugin.playback().next(player);
+        }
         player.sendMessage(ChatColor.YELLOW + "⏭ Skipping to next track.");
         refreshLater(top, player);
       }

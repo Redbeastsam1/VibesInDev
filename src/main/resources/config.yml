@@ -6,7 +6,8 @@
 config-version: 2
 
 tools:
-  yt-dlp: 'C:\Users\Samanyu S Barna\Desktop\Youtube downloader\yt-dlp.exe'
+  # "yt-dlp" if in system PATH, or absolute path e.g. "C:/tools/yt-dlp.exe" or "/usr/local/bin/yt-dlp"
+  yt-dlp: "yt-dlp"
   ffmpeg: "ffmpeg"
   process-timeout-seconds: 300
   # Optional: lets yt-dlp bypass age restrictions and regional blocks.

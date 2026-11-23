@@ -2,7 +2,7 @@ package dev.redbeastsam.vibesindev.recommendation;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.*;
 
 import dev.redbeastsam.vibesindev.VibesInDevPlugin;
 import dev.redbeastsam.vibesindev.cache.TrackCache;
@@ -16,7 +16,6 @@ import org.bukkit.configuration.file.FileConfiguration;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.Mockito;
 
 @SuppressWarnings("null")
 public class StreamAHonestyTest {
@@ -30,10 +29,10 @@ public class StreamAHonestyTest {
   @BeforeEach
   public void setUp() {
     SpotifyClient.clearKnownArtistIds();
-    mockPlugin = Mockito.mock(VibesInDevPlugin.class);
-    mockCache = Mockito.mock(TrackCache.class);
-    mockSpotify = Mockito.mock(SpotifyClient.class);
-    mockConfig = Mockito.mock(FileConfiguration.class);
+    mockPlugin = mock(VibesInDevPlugin.class);
+    mockCache = mock(TrackCache.class);
+    mockSpotify = mock(SpotifyClient.class);
+    mockConfig = mock(FileConfiguration.class);
 
     when(mockPlugin.cache()).thenReturn(mockCache);
     when(mockPlugin.spotify()).thenReturn(mockSpotify);

@@ -2,7 +2,6 @@ package dev.redbeastsam.vibesindev.network;
 
 import dev.redbeastsam.vibesindev.audio.MusicAudioPlayer;
 import dev.redbeastsam.vibesindev.audio.MusicStreamBuffer;
-import dev.redbeastsam.vibesindev.network.MusicPayload;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;

@@ -11,7 +11,7 @@ classes/
 
 # idea
 
-.idea/
+# .idea/ included by request (user workspace.xml ignored via .idea/.gitignore)
 *.iml
 *.ipr
 *.iws

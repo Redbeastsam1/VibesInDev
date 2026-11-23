@@ -2,7 +2,7 @@ package dev.redbeastsam.vibesindev.recommendation;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.*;
 
 import dev.redbeastsam.vibesindev.VibesInDevPlugin;
 import dev.redbeastsam.vibesindev.cache.TrackCache;
@@ -15,7 +15,6 @@ import java.util.UUID;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.Mockito;
 
 public class FamiliarStreamTest {
   private VibesInDevPlugin mockPlugin;
@@ -28,10 +27,10 @@ public class FamiliarStreamTest {
 
   @BeforeEach
   public void setUp() {
-    mockPlugin = Mockito.mock(VibesInDevPlugin.class);
-    mockCache = Mockito.mock(TrackCache.class);
-    mockPlaylists = Mockito.mock(MusicPlaylistManager.class);
-    mockConfig = Mockito.mock(FileConfiguration.class);
+    mockPlugin = mock(VibesInDevPlugin.class);
+    mockCache = mock(TrackCache.class);
+    mockPlaylists = mock(MusicPlaylistManager.class);
+    mockConfig = mock(FileConfiguration.class);
 
     when(mockPlugin.cache()).thenReturn(mockCache);
     when(mockPlugin.playlists()).thenReturn(mockPlaylists);

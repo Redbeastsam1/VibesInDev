@@ -1,7 +1,7 @@
 # VibesInDev
 
-[![Java](https://img.shields.io/badge/Java-21%20%7C%2025-orange.svg)](https://adoptium.net/)
-[![Minecraft](https://img.shields.io/badge/Minecraft-1.21.4%2B-brightgreen.svg)](https://www.minecraft.net/)
+[![Java](https://img.shields.io/badge/Java-25-orange.svg)](https://adoptium.net/)
+[![Minecraft](https://img.shields.io/badge/Minecraft-26.3-brightgreen.svg)](https://www.minecraft.net/)
 [![Paper](https://img.shields.io/badge/Platform-Paper%20%2F%20Purpur-blue.svg)](https://papermc.io/)
 [![Fabric](https://img.shields.io/badge/Client-Fabric-lightgrey.svg)](https://fabricmc.net/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -69,7 +69,7 @@ Powered by **Recommendation Engine v2**, VibesInDev keeps the music playing with
 ## Requirements & Prerequisites
 
 ### Server-Side Requirements
-* **Server Software**: Paper, Purpur, or Spigot for **Minecraft 1.21.4+** (Java 21 or Java 25 recommended).
+* **Server Software**: Paper, Purpur, or Spigot for **Minecraft 26.3** (Java 25 required).
 * **System Binaries**: Both `yt-dlp` and `ffmpeg` must be installed on the machine hosting the Minecraft server:
   * **Windows (via winget)**:
     ```powershell
@@ -92,7 +92,7 @@ Powered by **Recommendation Engine v2**, VibesInDev keeps the music playing with
     ```
 
 ### Client-Side Requirements (For Players)
-* **Minecraft**: Java Edition 1.21.4+.
+* **Minecraft**: Java Edition 26.3 (Java 25).
 * **Fabric Loader**: [Fabric Loader](https://fabricmc.net/use/installer/) installed on the player's launcher.
 * **Fabric API**: Latest [Fabric API](https://modrinth.com/mod/fabric-api) jar in `.minecraft/mods/`.
 * **Companion Mod**: `vibesindev-1.0.0.jar` placed in `.minecraft/mods/`.
@@ -176,7 +176,7 @@ If you do not run a tunnel or reverse proxy:
 ---
 
 ### 4. Client Companion Mod Setup (For Players)
-1. Install [Fabric Loader](https://fabricmc.net/) for Minecraft **1.21.4+**.
+1. Install [Fabric Loader](https://fabricmc.net/) for Minecraft **26.3**.
 2. Download [Fabric API](https://modrinth.com/mod/fabric-api) and place it in `.minecraft/mods/`.
 3. Download `vibesindev-1.0.0.jar` from [Releases](https://github.com/Redbeastsam1/VibesInDev/releases) and place it in `.minecraft/mods/`.
 4. Launch Minecraft and join the server. Audio will stream natively through your client!

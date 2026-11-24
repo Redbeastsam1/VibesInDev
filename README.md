@@ -102,7 +102,7 @@ Powered by **Recommendation Engine v2**, VibesInDev keeps the music playing with
 ## Step-by-Step Setup Guide
 
 ### 1. Server Installation
-1. Download the latest `VibesInDev-1.0.0.jar` from the [Releases](https://github.com/your-username/VibesInDev/releases) page.
+1. Download the latest `VibesInDev-1.0.0.jar` from the [Releases](https://github.com/Redbeastsam1/VibesInDev/releases) page.
 2. Place `VibesInDev-1.0.0.jar` into your Minecraft server's `plugins/` directory.
 3. Start the server once to generate the default configuration file, then shut down or prepare to edit `plugins/VibesInDev/config.yml`.
 4. Verify `tools.yt-dlp` and `tools.ffmpeg` in `config.yml`:
@@ -178,7 +178,7 @@ If you do not run a tunnel or reverse proxy:
 ### 4. Client Companion Mod Setup (For Players)
 1. Install [Fabric Loader](https://fabricmc.net/) for Minecraft **1.21.4+**.
 2. Download [Fabric API](https://modrinth.com/mod/fabric-api) and place it in `.minecraft/mods/`.
-3. Download `vibesindev-1.0.0.jar` from [Releases](https://github.com/your-username/VibesInDev/releases) and place it in `.minecraft/mods/`.
+3. Download `vibesindev-1.0.0.jar` from [Releases](https://github.com/Redbeastsam1/VibesInDev/releases) and place it in `.minecraft/mods/`.
 4. Launch Minecraft and join the server. Audio will stream natively through your client!
 
 ---
